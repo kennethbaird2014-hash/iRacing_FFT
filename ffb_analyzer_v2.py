@@ -12,7 +12,7 @@ New in v2.0:
 Author: generated for Kenneth Baird
 """
 
-import sys, time, math, json
+import sys, time, math, json, copy
 import numpy as np
 import pygame
 from pathlib import Path
@@ -555,7 +555,9 @@ class FFTProcessor(QObject):
         self._last_sample  = 0.0  # last real sample value (held during fade)
 
     def set_bands(self, bands):
-        self.active_bands = bands
+        # Snapshot: shallow-copy each EQBand so UI mutations mid-chunk can't
+        # corrupt the filter parameters being read on the iRacing worker thread.
+        self.active_bands = [copy.copy(b) for b in bands]
 
     def begin_fade(self):
         """Start the 500 ms hold + 1 s fade-out sequence."""
@@ -655,13 +657,24 @@ class FFTProcessor(QObject):
         data_raw = np.array(self._raw_buf) - np.mean(self._raw_buf)
         mag_raw  = np.abs(np.fft.rfft(data_raw * self._window)) / (FFT_SIZE / 2)
         raw_db   = 20.0 * np.log10(np.maximum(mag_raw, 1e-10))
-        self._smooth_raw = (raw_db if self._smooth_raw is None else EMA_ALPHA * raw_db + (1 - EMA_ALPHA) * self._smooth_raw)
+        if self._smooth_raw is None:
+            self._smooth_raw = raw_db
+        else:
+            # In-place EMA: no temporary array allocated
+            self._smooth_raw *= (1.0 - EMA_ALPHA)
+            raw_db           *= EMA_ALPHA
+            self._smooth_raw += raw_db
 
         # FX
         data_fx = np.array(self._fx_buf) - np.mean(self._fx_buf)
         mag_fx  = np.abs(np.fft.rfft(data_fx * self._window)) / (FFT_SIZE / 2)
         fx_db   = 20.0 * np.log10(np.maximum(mag_fx, 1e-10))
-        self._smooth_fx = (fx_db if self._smooth_fx is None else EMA_ALPHA * fx_db + (1 - EMA_ALPHA) * self._smooth_fx)
+        if self._smooth_fx is None:
+            self._smooth_fx = fx_db
+        else:
+            self._smooth_fx *= (1.0 - EMA_ALPHA)
+            fx_db           *= EMA_ALPHA
+            self._smooth_fx += fx_db
 
         self.spectrum_ready.emit(self.freq_bins, self._smooth_raw.copy(), self._smooth_fx.copy(), float(np.sqrt(np.mean(data_raw**2))))
         # DISABLED: self.modal_ready.emit(self.freq_bins, mag_raw, data_raw)
@@ -1230,8 +1243,11 @@ class MainWindow(QMainWindow):
         # Precompute truncated bin count matching FFTProcessor output
         # Full Nyquist bin count — matches FFTProcessor output
         n_bins = FFT_SIZE // 2 + 1
-        # Store waterfall in native (freq, time) orientation — no .T needed
-        self._wf_buf = np.full((n_bins, WATERFALL_ROWS), -80.0, dtype=np.float32)
+        # Circular waterfall buffer — avoids np.roll allocation every frame.
+        # _wf_head is the next write column (newest → col 0 in display).
+        self._wf_buf     = np.full((n_bins, WATERFALL_ROWS), -80.0, dtype=np.float32)
+        self._wf_display = np.empty((n_bins, WATERFALL_ROWS), dtype=np.float32)
+        self._wf_head    = 0
 
         pg.setConfigOptions(antialias=True, background="#0d0d0d")
         self._build_ui()
@@ -1930,6 +1946,14 @@ class MainWindow(QMainWindow):
         """Update live torque readout in header."""
         col_in  = "#00ff88" if peak_in  > 0.1 else "#555"
         col_out = "#00c8ff" if peak_out > 0.1 else "#555"
+        # Skip redraw if neither value nor colour changed (avoids HTML churn at 30 Hz)
+        if (col_in  == getattr(self, '_env_col_in',  None) and
+            col_out == getattr(self, '_env_col_out', None) and
+            abs(peak_in  - getattr(self, '_env_peak_in',  -1)) < 0.01 and
+            abs(peak_out - getattr(self, '_env_peak_out', -1)) < 0.01):
+            return
+        self._env_col_in   = col_in;  self._env_col_out  = col_out
+        self._env_peak_in  = peak_in; self._env_peak_out = peak_out
         self._torque_lbl.setText(
             f"<span style='color:{col_in}'>in: {peak_in:5.2f} Nm</span>"
             f"<span style='color:#444'>  |  </span>"
@@ -1971,9 +1995,15 @@ class MainWindow(QMainWindow):
         if getattr(self, '_wf_transform', None) is not None and self._wf_transform.currentIndex() == 1:
             wf_line = mag_db - (self._last_mag_db if self._last_mag_db is not None else mag_db)
 
-        self._wf_buf = np.roll(self._wf_buf, 1, axis=1)
-        self._wf_buf[:, 0] = wf_line
-        self._wf_img.setImage(self._wf_buf, autoLevels=False, autoDownsample=True)
+        # Circular-buffer write: decrement head so newest lands at col 0 in display.
+        self._wf_head = (self._wf_head - 1) % WATERFALL_ROWS
+        self._wf_buf[:, self._wf_head] = wf_line.astype(np.float32)
+        # Assemble display (newest→col 0) in-place — zero heap allocation.
+        h = self._wf_head
+        tail = WATERFALL_ROWS - h
+        self._wf_display[:, :tail] = self._wf_buf[:, h:]
+        self._wf_display[:, tail:] = self._wf_buf[:, :h]
+        self._wf_img.setImage(self._wf_display, autoLevels=False, autoDownsample=True)
 
         # DISABLED: record mode
         # if self._record_mode:
