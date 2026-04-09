@@ -37,6 +37,14 @@ try:
 except ImportError:
     MOZA_AVAILABLE = False
 
+# Null output — safe no-op driver for testing without physical hardware.
+# Auto-selected when neither MOZA nor DirectInput bridge is available.
+try:
+    from null_output import NullFFBOutput
+    NULL_AVAILABLE = True
+except ImportError:
+    NULL_AVAILABLE = False
+
 import pyqtgraph as pg
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget,
@@ -1618,6 +1626,10 @@ class MainWindow(QMainWindow):
                 self._moza_toggle.setEnabled(False)
             else:
                 self._moza_status.setText("DirectInput bridge ready (non-exclusive)")
+        elif NULL_AVAILABLE:
+            self._moza = NullFFBOutput(max_torque_nm=12.0)
+            self._moza_status.setText(
+                "Null output (safe mode) — DSP runs normally, no torque sent to hardware")
         else:
             self._moza_status.setText("No FFB bridge — run build_bridge.bat")
             self._moza_toggle.setEnabled(False)
@@ -2308,6 +2320,18 @@ class MainWindow(QMainWindow):
         If Pit House evicted our SDK handle, cleanly stops the old instance,
         waits one watchdog cycle (3 s) for Pit House to settle, then retries."""
         if self._moza is None:
+            return
+
+        # Null output: just show live throughput stats — no SDK to check.
+        if getattr(self._moza, 'IS_NULL', False):
+            if self._moza.active:
+                rate = self._moza.call_rate_hz
+                peak = self._moza.peak_nm
+                self._moza_status.setText(
+                    f"Null output — {rate:.0f} Hz  |  peak {peak:.2f} Nm  "
+                    f"(no hardware)")
+                self._moza_status.setStyleSheet(
+                    "color:#ffaa00; font-size:9px; font-family:Consolas;")
             return
 
         still_active = self._moza.active
