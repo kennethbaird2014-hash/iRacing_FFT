@@ -1,0 +1,23 @@
+{
+	"folders": [
+		{
+			"path": "."
+		},
+		{
+			"path": "../iRacing"
+		},
+		{
+			"path": "../MarvinsAIRA"
+		},
+		{
+			"path": "../MarvinsAIRA Refactored"
+		},
+		{
+			"path": "../MOZA Pit House"
+		},
+		{
+			"path": "../SimHub"
+		}
+	],
+	"settings": {}
+}

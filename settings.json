@@ -1,0 +1,14 @@
+{
+  "listen_button": [
+    4,
+    18
+  ],
+  "gain_up_button": [
+    4,
+    47
+  ],
+  "gain_down_button": [
+    4,
+    46
+  ]
+}
