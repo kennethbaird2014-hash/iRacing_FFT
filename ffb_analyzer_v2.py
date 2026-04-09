@@ -40,11 +40,12 @@ except ImportError:
 import pyqtgraph as pg
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget,
-    QVBoxLayout, QHBoxLayout, QLabel,
+    QVBoxLayout, QHBoxLayout, QFormLayout, QLabel,
     QPushButton, QGroupBox, QDoubleSpinBox,
     QCheckBox, QComboBox, QScrollArea,
     QSplitter, QFrame, QSizePolicy, QLineEdit,
     QTableWidget, QTableWidgetItem, QHeaderView,
+    QTabWidget,
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QObject, QRectF, QTimer
 from PyQt6.QtGui import QPainter, QLinearGradient, QPen, QColor, QFont, QPalette
@@ -1470,18 +1471,7 @@ class MainWindow(QMainWindow):
             "QPushButton:hover{border-color:#ffcc44;}")
         band_row.addWidget(self._detect_btn)
         
-        self._assign_btn = QPushButton("Bind Wheel Button")
-        self._assign_btn.setFixedWidth(130)
-        self._assign_btn.clicked.connect(self._start_assign)
-        band_row.addWidget(self._assign_btn)
-
-        note = QLabel(
-            "Dotted = individual bands  |  Dashed white = combined response  |  "
-            "MOZA direct output: see Global FX panel"
-        )
-        note.setStyleSheet("color:#555; font-size:10px; font-style:italic;")
-        note.setWordWrap(True)
-        band_row.addWidget(note, 1)
+        band_row.addStretch()
         eq_vb.addLayout(band_row)
 
         # Band list
@@ -1500,189 +1490,119 @@ class MainWindow(QMainWindow):
 
         bot_split.addWidget(eq_box)
 
-        from PyQt6.QtWidgets import QFormLayout
-        fx_box = QGroupBox("Global FX")
+        fx_box = QGroupBox("DSP / Output")
         fx_vb = QVBoxLayout(fx_box)
-        fx_vb.setContentsMargins(6,14,6,6)
-        
-        form = QFormLayout()
+        fx_vb.setContentsMargins(4, 14, 4, 4)
 
-        # ── Master (Output) Gain — always last in signal chain ─────────────────
-        gn_box = QHBoxLayout()
+        tabs = QTabWidget()
+        fx_vb.addWidget(tabs)
+
+        # ── Tab 1: DSP — core signal chain ───────────────────────────
+        dsp_w    = QWidget()
+        dsp_form = QFormLayout(dsp_w)
+        dsp_form.setContentsMargins(6, 6, 6, 6); dsp_form.setSpacing(4)
+
         self._master_gain = QDoubleSpinBox()
-        self._master_gain.setRange(-48.0, 24.0)
-        self._master_gain.setSingleStep(0.1)
-        self._master_gain.setSuffix(" dB")
+        self._master_gain.setRange(-48.0, 24.0); self._master_gain.setSingleStep(0.1); self._master_gain.setSuffix(" dB")
         self._master_gain.setToolTip("Output gain applied after EQ and compressor")
         self._master_gain.valueChanged.connect(self._sync_dsp)
-        gn_box.addWidget(self._master_gain)
+        dsp_form.addRow("Master Gain:", self._master_gain)
 
-        self._gain_up_btn = QPushButton("Bind Up")
-        self._gain_up_btn.clicked.connect(self._start_assign_gain_up)
-        gn_box.addWidget(self._gain_up_btn)
-
-        self._gain_down_btn = QPushButton("Bind Dn")
-        self._gain_down_btn.clicked.connect(self._start_assign_gain_down)
-        gn_box.addWidget(self._gain_down_btn)
-
-        form.addRow("Master Gain:", gn_box)
-
-        self._wf_transform = QComboBox()
-        self._wf_transform.addItems(["Normal", "dy/dx (Time Diff)"])
-        self._wf_transform.setToolTip("Computes delta of spectrum over time for waterfall (highlights changes)")
-        self._wf_transform.currentIndexChanged.connect(self._sync_dsp)
-        form.addRow("Waterfall:", self._wf_transform)
-
-        fline = QFrame(); fline.setFrameShape(QFrame.Shape.HLine); fline.setStyleSheet("color:#444;")
-        form.addRow(fline)
+        _d1 = QFrame(); _d1.setFrameShape(QFrame.Shape.HLine); _d1.setStyleSheet("color:#333;")
+        dsp_form.addRow(_d1)
 
         self._comp_thr = QDoubleSpinBox()
         self._comp_thr.setRange(-80.0, 0.0); self._comp_thr.setSingleStep(1.0); self._comp_thr.setSuffix(" dB"); self._comp_thr.setValue(0.0)
         self._comp_thr.valueChanged.connect(self._sync_dsp)
-        form.addRow("Comp Thresh:", self._comp_thr)
+        dsp_form.addRow("Comp Thresh:", self._comp_thr)
 
         self._comp_ratio = QDoubleSpinBox()
         self._comp_ratio.setRange(1.0, 20.0); self._comp_ratio.setSingleStep(0.5); self._comp_ratio.setValue(1.0)
         self._comp_ratio.valueChanged.connect(self._sync_dsp)
-        form.addRow("Comp Ratio:", self._comp_ratio)
+        dsp_form.addRow("Comp Ratio:", self._comp_ratio)
 
         self._comp_att = QDoubleSpinBox()
         self._comp_att.setRange(1.0, 500.0); self._comp_att.setSingleStep(10); self._comp_att.setValue(10); self._comp_att.setSuffix(" ms")
         self._comp_att.valueChanged.connect(self._sync_dsp)
-        form.addRow("Attack:", self._comp_att)
+        dsp_form.addRow("Attack:", self._comp_att)
 
         self._comp_rel = QDoubleSpinBox()
         self._comp_rel.setRange(10.0, 2000.0); self._comp_rel.setSingleStep(20); self._comp_rel.setValue(50); self._comp_rel.setSuffix(" ms")
         self._comp_rel.valueChanged.connect(self._sync_dsp)
-        form.addRow("Release:", self._comp_rel)
+        dsp_form.addRow("Release:", self._comp_rel)
 
-        fline2 = QFrame(); fline2.setFrameShape(QFrame.Shape.HLine); fline2.setStyleSheet("color:#444;")
-        form.addRow(fline2)
+        _d2 = QFrame(); _d2.setFrameShape(QFrame.Shape.HLine); _d2.setStyleSheet("color:#333;")
+        dsp_form.addRow(_d2)
 
         self._octaver_blend = QDoubleSpinBox()
         self._octaver_blend.setRange(0.0, 1.0); self._octaver_blend.setSingleStep(0.05); self._octaver_blend.setValue(0.0)
         self._octaver_blend.valueChanged.connect(self._sync_dsp)
-        form.addRow("Octaver Blend:", self._octaver_blend)
+        dsp_form.addRow("Octaver Blend:", self._octaver_blend)
 
-        fline3 = QFrame(); fline3.setFrameShape(QFrame.Shape.HLine); fline3.setStyleSheet("color:#444;")
-        form.addRow(fline3)
+        _d3 = QFrame(); _d3.setFrameShape(QFrame.Shape.HLine); _d3.setStyleSheet("color:#333;")
+        dsp_form.addRow(_d3)
 
-        # ── v2: Slew-rate limiter ─────────────────────────────
         self._slew_delta = QDoubleSpinBox()
         self._slew_delta.setRange(0.0, 5.0); self._slew_delta.setSingleStep(0.05); self._slew_delta.setValue(0.0)
         self._slew_delta.setSuffix(" Nm/smp")
         self._slew_delta.setToolTip("Max Nm change per sample. 0 = disabled.\n"
                                     "Kills whiplash spikes. Try 0.5–2.0 Nm/sample.")
         self._slew_delta.valueChanged.connect(self._sync_dsp)
-        form.addRow("Slew Limit:", self._slew_delta)
+        dsp_form.addRow("Slew Limit:", self._slew_delta)
 
-        # ── v2: Crash / curb protection ───────────────────────
-        crash_row = QHBoxLayout()
-        self._crash_thr = QDoubleSpinBox()
-        self._crash_thr.setRange(1.0, 30.0); self._crash_thr.setSingleStep(0.5); self._crash_thr.setValue(8.0)
-        self._crash_thr.setSuffix(" m/s²")
-        self._crash_thr.setToolTip("G-force threshold (m/s²) above which crash protection triggers")
-        crash_row.addWidget(self._crash_thr)
-
-        self._crash_reduce = QDoubleSpinBox()
-        self._crash_reduce.setRange(0.0, 1.0); self._crash_reduce.setSingleStep(0.05); self._crash_reduce.setValue(0.3)
-        self._crash_reduce.setToolTip("Output gain multiplier during crash event (0 = mute, 1 = no duck)")
-        crash_row.addWidget(QLabel("Duck:"))
-        crash_row.addWidget(self._crash_reduce)
-
-        self._crash_dur = QDoubleSpinBox()
-        self._crash_dur.setRange(0.1, 5.0); self._crash_dur.setSingleStep(0.1); self._crash_dur.setValue(1.0)
-        self._crash_dur.setSuffix(" s")
-        self._crash_dur.setToolTip("How long to hold the gain reduction after a crash")
-        crash_row.addWidget(QLabel("Hold:"))
-        crash_row.addWidget(self._crash_dur)
-        form.addRow("Crash Prot:", crash_row)
-
-        # Crash protection state
-        self._crash_timer = QTimer()
-        self._crash_timer.setSingleShot(True)
-        self._crash_timer.timeout.connect(self._crash_release)
-
-        fline4 = QFrame(); fline4.setFrameShape(QFrame.Shape.HLine); fline4.setStyleSheet("color:#444;")
-        form.addRow(fline4)
-
-        # ── v2: Output curve ────────────────────────────────
         self._out_curve = QDoubleSpinBox()
         self._out_curve.setRange(0.0, 1.0); self._out_curve.setSingleStep(0.05); self._out_curve.setValue(0.0)
-        self._out_curve.setToolTip("Output shaping curve. 0 = linear, 1 = full tanh soft-clip.\n"
-                                   "Compresses peaks while preserving low-force feel.")
+        self._out_curve.setToolTip("Output shaping. 0 = linear, 1 = full tanh soft-clip.")
         self._out_curve.valueChanged.connect(self._sync_dsp)
-        form.addRow("Out Curve:", self._out_curve)
+        dsp_form.addRow("Out Curve:", self._out_curve)
 
-        # ── v2: Output smoothing ────────────────────────────
         self._out_smooth = QDoubleSpinBox()
         self._out_smooth.setRange(0.0, 0.99); self._out_smooth.setSingleStep(0.05); self._out_smooth.setValue(0.0)
-        self._out_smooth.setToolTip("Single-pole low-pass on output (0 = off, 0.9 = heavy smoothing).\n"
-                                    "Softens feel. Acts like irFFB output smoothing.")
+        self._out_smooth.setToolTip("Single-pole LP on output (0 = off, 0.9 = heavy).")
         self._out_smooth.valueChanged.connect(self._sync_dsp)
-        form.addRow("Out Smooth:", self._out_smooth)
+        dsp_form.addRow("Out Smooth:", self._out_smooth)
 
-        # ── Direct FFB Output ─────────────────────────────
-        fline5 = QFrame(); fline5.setFrameShape(QFrame.Shape.HLine); fline5.setStyleSheet("color:#444;")
-        form.addRow(fline5)
+        tabs.addTab(dsp_w, "DSP")
 
-        moza_row = QHBoxLayout()
+        # ── Tab 2: Output — hardware FFB output ──────────────────────
+        out_w    = QWidget()
+        out_form = QFormLayout(out_w)
+        out_form.setContentsMargins(6, 6, 6, 6); out_form.setSpacing(4)
+
         self._moza_toggle = QPushButton("Direct Output: OFF")
         self._moza_toggle.setCheckable(True)
-        self._moza_toggle.setFixedWidth(160)
         self._moza_toggle.setToolTip(
             "Send processed FFB directly to wheel via DirectInput (exclusive access).\n"
-            "Works regardless of iRacing FFB slider setting.\n"
             "Requires dinput_bridge.dll (run build_dinput_bridge.bat).\n"
-            "Pit House must be running.  Set iRacing FFB to 0% in-game."
-        )
+            "Pit House must be running.  Set iRacing FFB to 0% in-game.")
         self._moza_toggle.toggled.connect(self._toggle_moza_output)
-        moza_row.addWidget(self._moza_toggle)
+        out_form.addRow("Enable:", self._moza_toggle)
 
-        # Wheelbase physical max — scaling reference, NOT a volume knob.
-        # R12 V2 = 12 Nm.  Changing this does NOT limit output; it sets
-        # the denominator for the DI magnitude conversion.
+        # Wheelbase physical max — scaling reference, not an output limiter.
         self._moza_torque = QDoubleSpinBox()
         self._moza_torque.setRange(1.0, 25.0); self._moza_torque.setSingleStep(0.5)
         self._moza_torque.setValue(12.0); self._moza_torque.setSuffix(" Nm")
         self._moza_torque.setToolTip(
-            "Physical max torque of your wheelbase.\n"
-            "R12 V2 = 12 Nm  |  R9 = 9 Nm  |  R5 = 5.5 Nm\n"
-            "⚠ This is a SCALING REFERENCE, not an output limiter.\n"
-            "Use the ET Output % slider to control actual strength.")
-        moza_row.addWidget(QLabel("WB max:"))
-        moza_row.addWidget(self._moza_torque)
+            "Physical max torque of your wheelbase (scaling reference).\n"
+            "R12 V2 = 12 Nm  |  R9 = 9 Nm  |  R5 = 5.5 Nm")
+        out_form.addRow("WB Max:", self._moza_torque)
 
-        # Output scale — the REAL volume knob (0–100 %, default 25 %).
-        # Multiplied into every sample before magnitude conversion.
-        # Hardcoded DLL clamp: ±10 Nm regardless of this setting.
+        # Output scale — actual volume control (0–100 %, default 25 %).
         self._moza_scale = QDoubleSpinBox()
         self._moza_scale.setRange(0.0, 100.0); self._moza_scale.setSingleStep(5.0)
         self._moza_scale.setValue(25.0); self._moza_scale.setSuffix(" %")
         self._moza_scale.setToolTip(
-            "ET channel output strength (0 = silent, 100 = full scale).\n"
-            "Start low (25 %) and work up.  DLL hard-clamps at ±10 Nm.")
+            "ET channel output strength (0 = silent, 100 = full).\n"
+            "Start at 25 % and work up.  DLL hard-clamps at ±10 Nm.")
         self._moza_scale.valueChanged.connect(self._on_moza_scale_changed)
-        moza_row.addWidget(QLabel("ET Output:"))
-        moza_row.addWidget(self._moza_scale)
-        form.addRow("FFB Out:", moza_row)
+        out_form.addRow("ET Output:", self._moza_scale)
 
         self._moza_status = QLabel("")
         self._moza_status.setStyleSheet("color:#888; font-size:9px; font-family:Consolas;")
-        form.addRow("", self._moza_status)
+        self._moza_status.setWordWrap(True)
+        out_form.addRow("", self._moza_status)
 
-        self._moza_mode = QComboBox()
-        self._moza_mode.addItems(["Delta (EQ correction only)", "Full replace (iRacing FFB = 0)"])
-        self._moza_mode.setToolTip(
-            "Delta: sends EQ(signal) - signal via ET channel.\n"
-            "  Pit House runs game FFB normally; we add the correction on top.\n"
-            "  iRacing FFB must be ON in Pit House.\n\n"
-            "Full replace: sends entire EQ'd signal.\n"
-            "  Set iRacing FFB to 0% in Pit House so it doesn't double-up.")
-        self._moza_mode.currentIndexChanged.connect(self._on_moza_mode_changed)
-        form.addRow("Mode:", self._moza_mode)
-
-        # MOZA SDK bridge (primary — routes through Pit House, no device conflict)
+        # Initialise hardware output object (needs _moza_status to exist first)
         self._moza = None
         if MOZA_AVAILABLE:
             self._moza = MozaFFBOutput(max_torque_nm=12.0)
@@ -1702,77 +1622,136 @@ class MainWindow(QMainWindow):
             self._moza_status.setText("No FFB bridge — run build_bridge.bat")
             self._moza_toggle.setEnabled(False)
 
-        # ── Pit House EQ control (no device conflict) ──────────
-        fline6 = QFrame(); fline6.setFrameShape(QFrame.Shape.HLine); fline6.setStyleSheet("color:#444;")
-        form.addRow(fline6)
+        self._moza_mode = QComboBox()
+        self._moza_mode.addItems(["Delta (EQ correction only)", "Full replace (iRacing FFB = 0)"])
+        self._moza_mode.setToolTip(
+            "Delta: adds EQ correction on top of Pit House game FFB.\n"
+            "Full replace: sends the full EQ'd signal (set iRacing FFB to 0% in PH).")
+        self._moza_mode.currentIndexChanged.connect(self._on_moza_mode_changed)
+        out_form.addRow("Mode:", self._moza_mode)
+
+        _o1 = QFrame(); _o1.setFrameShape(QFrame.Shape.HLine); _o1.setStyleSheet("color:#333;")
+        out_form.addRow(_o1)
 
         ph_row = QHBoxLayout()
         self._ph_init_btn = QPushButton("Connect SDK")
         self._ph_init_btn.setFixedWidth(100)
         self._ph_init_btn.setToolTip(
-            "Initialise MOZA SDK (no device lock taken).\n"
-            "Allows pushing EQ settings directly to Pit House motor.\n"
-            "Works while iRacing is running — no ownership conflict.")
+            "Initialise MOZA SDK (no device lock).\n"
+            "Allows pushing EQ to Pit House motor without ownership conflict.")
         self._ph_init_btn.clicked.connect(self._ph_sdk_init)
         ph_row.addWidget(self._ph_init_btn)
 
         self._ph_push_btn = QPushButton("Push EQ →")
         self._ph_push_btn.setFixedWidth(80)
-        self._ph_push_btn.setToolTip("Push current parametric EQ as 6-band settings to Pit House motor.")
+        self._ph_push_btn.setToolTip("Push parametric EQ as 6-band settings to Pit House motor.")
         self._ph_push_btn.clicked.connect(self._ph_push_eq)
         self._ph_push_btn.setEnabled(False)
         ph_row.addWidget(self._ph_push_btn)
 
         self._ph_reset_btn = QPushButton("Reset EQ")
-        self._ph_reset_btn.setFixedWidth(70)
+        self._ph_reset_btn.setFixedWidth(72)
         self._ph_reset_btn.setToolTip("Reset Pit House motor EQ to unity (all bands = 100).")
         self._ph_reset_btn.clicked.connect(self._ph_reset_eq)
         self._ph_reset_btn.setEnabled(False)
         ph_row.addWidget(self._ph_reset_btn)
 
-        self._ph_autosync = QCheckBox("Auto-sync")
+        self._ph_autosync = QCheckBox("Auto")
         self._ph_autosync.setToolTip("Push EQ to Pit House automatically whenever bands change.")
         self._ph_autosync.setEnabled(False)
         ph_row.addWidget(self._ph_autosync)
-        form.addRow("PH EQ:", ph_row)
+        out_form.addRow("PH EQ:", ph_row)
 
         self._ph_status = QLabel("SDK not connected")
         self._ph_status.setStyleSheet("color:#555; font-size:9px; font-family:Consolas;")
-        form.addRow("", self._ph_status)
+        self._ph_status.setWordWrap(True)
+        out_form.addRow("", self._ph_status)
 
-        self._ph_sdk_ready = False  # set True after successful sdk_init
+        self._ph_sdk_ready = False
 
-        # ── Test tone ──────────────────────────────────────────
+        tabs.addTab(out_w, "Output")
+
+        # ── Tab 3: Tools — diagnostics, wheel bindings, protection ───
+        tools_w    = QWidget()
+        tools_form = QFormLayout(tools_w)
+        tools_form.setContentsMargins(6, 6, 6, 6); tools_form.setSpacing(4)
+
+        self._wf_transform = QComboBox()
+        self._wf_transform.addItems(["Normal", "dy/dx (Time Diff)"])
+        self._wf_transform.setToolTip("Waterfall display mode:\n"
+                                      "Normal = raw spectrum\n"
+                                      "dy/dx = highlights spectral changes over time")
+        tools_form.addRow("Waterfall:", self._wf_transform)
+
+        _t1 = QFrame(); _t1.setFrameShape(QFrame.Shape.HLine); _t1.setStyleSheet("color:#333;")
+        tools_form.addRow(_t1)
+
+        crash_row = QHBoxLayout()
+        self._crash_thr = QDoubleSpinBox()
+        self._crash_thr.setRange(1.0, 30.0); self._crash_thr.setSingleStep(0.5); self._crash_thr.setValue(8.0)
+        self._crash_thr.setSuffix(" m/s²")
+        self._crash_thr.setToolTip("G-force threshold above which crash protection triggers")
+        crash_row.addWidget(self._crash_thr)
+        self._crash_reduce = QDoubleSpinBox()
+        self._crash_reduce.setRange(0.0, 1.0); self._crash_reduce.setSingleStep(0.05); self._crash_reduce.setValue(0.3)
+        self._crash_reduce.setToolTip("Output gain during crash (0 = mute, 1 = no reduction)")
+        crash_row.addWidget(QLabel("Duck:"))
+        crash_row.addWidget(self._crash_reduce)
+        self._crash_dur = QDoubleSpinBox()
+        self._crash_dur.setRange(0.1, 5.0); self._crash_dur.setSingleStep(0.1); self._crash_dur.setValue(1.0)
+        self._crash_dur.setSuffix(" s")
+        self._crash_dur.setToolTip("Duration of gain reduction after impact")
+        crash_row.addWidget(QLabel("Hold:"))
+        crash_row.addWidget(self._crash_dur)
+        tools_form.addRow("Crash Prot:", crash_row)
+
+        self._crash_timer = QTimer()
+        self._crash_timer.setSingleShot(True)
+        self._crash_timer.timeout.connect(self._crash_release)
+
+        _t2 = QFrame(); _t2.setFrameShape(QFrame.Shape.HLine); _t2.setStyleSheet("color:#333;")
+        tools_form.addRow(_t2)
+
+        btn_row = QHBoxLayout()
+        self._assign_btn = QPushButton("Bind Listen")
+        self._assign_btn.setFixedWidth(90)
+        self._assign_btn.setToolTip("Bind a wheel button to toggle Listen / Detect Peaks mode.")
+        self._assign_btn.clicked.connect(self._start_assign)
+        btn_row.addWidget(self._assign_btn)
+        self._gain_up_btn = QPushButton("Bind Gain ▲")
+        self._gain_up_btn.setFixedWidth(90)
+        self._gain_up_btn.clicked.connect(self._start_assign_gain_up)
+        btn_row.addWidget(self._gain_up_btn)
+        self._gain_down_btn = QPushButton("Bind Gain ▼")
+        self._gain_down_btn.setFixedWidth(90)
+        self._gain_down_btn.clicked.connect(self._start_assign_gain_down)
+        btn_row.addWidget(self._gain_down_btn)
+        tools_form.addRow("Buttons:", btn_row)
+
+        _t3 = QFrame(); _t3.setFrameShape(QFrame.Shape.HLine); _t3.setStyleSheet("color:#333;")
+        tools_form.addRow(_t3)
+
         tone_row = QHBoxLayout()
-        self._tone_btn = QPushButton("▶ Test Tone  (30 Hz / 3 Nm)")
+        self._tone_btn = QPushButton("▶ Test Tone")
         self._tone_btn.setCheckable(True)
         self._tone_btn.setToolTip(
-            "Inject a 30 Hz sine at 3 Nm directly through the DSP → MOZA output.\n"
-            "Bypasses iRacing — use to verify the output path works independently.\n"
-            "Visible as a spike at 30 Hz in the spectrum.")
+            "Injects a sine tone directly to the output — bypasses iRacing.\n"
+            "Use to verify the output path is alive.")
         self._tone_btn.toggled.connect(self._toggle_test_tone)
         tone_row.addWidget(self._tone_btn)
-
         self._tone_freq = QDoubleSpinBox()
         self._tone_freq.setRange(0.5, 100.0); self._tone_freq.setSingleStep(1.0)
-        self._tone_freq.setValue(30.0); self._tone_freq.setSuffix(" Hz")
-        self._tone_freq.setFixedWidth(78)
-        tone_row.addWidget(QLabel("f:"))
-        tone_row.addWidget(self._tone_freq)
-
+        self._tone_freq.setValue(30.0); self._tone_freq.setSuffix(" Hz"); self._tone_freq.setFixedWidth(78)
+        tone_row.addWidget(QLabel("f:")); tone_row.addWidget(self._tone_freq)
         self._tone_amp = QDoubleSpinBox()
         self._tone_amp.setRange(0.1, 12.0); self._tone_amp.setSingleStep(0.5)
-        self._tone_amp.setValue(3.0); self._tone_amp.setSuffix(" Nm")
-        self._tone_amp.setFixedWidth(72)
-        tone_row.addWidget(QLabel("amp:"))
-        tone_row.addWidget(self._tone_amp)
-        form.addRow("Debug:", tone_row)
+        self._tone_amp.setValue(3.0); self._tone_amp.setSuffix(" Nm"); self._tone_amp.setFixedWidth(72)
+        tone_row.addWidget(QLabel("amp:")); tone_row.addWidget(self._tone_amp)
+        tools_form.addRow("Test Tone:", tone_row)
 
-        # Test tone state (initialised here; timer created in _start_pipeline)
         self._tone_phase = 0.0
 
-        fx_vb.addLayout(form)
-        fx_vb.addStretch()
+        tabs.addTab(tools_w, "Tools")
 
         bot_split.addWidget(fx_box)
 
@@ -2215,7 +2194,7 @@ class MainWindow(QMainWindow):
             # Zero the output immediately so torque doesn't stay stuck on wheel
             if self._moza is not None and self._moza.active:
                 self._moza.set_torque_nm(0.0)
-            self._tone_btn.setText("▶ Test Tone  (30 Hz / 3 Nm)")
+            self._tone_btn.setText("▶ Test Tone")
             self._tone_btn.setStyleSheet("")
 
     def _pump_test_tone(self):
