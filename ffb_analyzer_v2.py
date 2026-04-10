@@ -12,7 +12,7 @@ New in v2.0:
 Author: generated for Kenneth Baird
 """
 
-import sys, time, math, json
+import sys, time, math, json, copy
 import numpy as np
 import pygame
 from pathlib import Path
@@ -37,14 +37,23 @@ try:
 except ImportError:
     MOZA_AVAILABLE = False
 
+# Null output — safe no-op driver for testing without physical hardware.
+# Auto-selected when neither MOZA nor DirectInput bridge is available.
+try:
+    from null_output import NullFFBOutput
+    NULL_AVAILABLE = True
+except ImportError:
+    NULL_AVAILABLE = False
+
 import pyqtgraph as pg
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget,
-    QVBoxLayout, QHBoxLayout, QLabel,
+    QVBoxLayout, QHBoxLayout, QFormLayout, QLabel,
     QPushButton, QGroupBox, QDoubleSpinBox,
     QCheckBox, QComboBox, QScrollArea,
     QSplitter, QFrame, QSizePolicy, QLineEdit,
     QTableWidget, QTableWidgetItem, QHeaderView,
+    QTabWidget,
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QObject, QRectF, QTimer
 from PyQt6.QtGui import QPainter, QLinearGradient, QPen, QColor, QFont, QPalette
@@ -66,8 +75,9 @@ EMA_ALPHA        = 0.20
 MAX_TORQUE_NM    = 20.0
 NYQUIST_60HZ     = 30.0     # marker: SDK default is 60 Hz → 30 Hz Nyquist
 
-PRESET_DIR = Path(__file__).parent / "presets"
-LOG_DIR    = Path(__file__).parent / "logs"
+PRESET_DIR      = Path(__file__).parent / "presets"
+LOG_DIR         = Path(__file__).parent / "logs"
+RECORDINGS_DIR  = Path(__file__).parent / "recordings"
 
 
 # ── EQ Band ───────────────────────────────────────────────────────────────────
@@ -328,6 +338,61 @@ class JoystickThread(QThread):
         self.wait(1000)
 
 # ── iRacing / demo thread ─────────────────────────────────────────────────────
+class TelemetryRecorder:
+    """Records raw steering-wheel torque samples from any source to an NPZ file.
+
+    Usage
+    -----
+    recorder.start(car_name="Porsche 911 GT3R")
+    # … FFTProcessor.add_sample() calls recorder.append(v) at 360 Hz …
+    path = recorder.stop()   # saves recordings/<car>_<timestamp>.npz
+    """
+
+    def __init__(self):
+        self._samples: list  = []
+        self._recording      = False
+        self._car_name       = ""
+
+    @property
+    def recording(self) -> bool:
+        return self._recording
+
+    @property
+    def sample_count(self) -> int:
+        return len(self._samples)
+
+    def start(self, car_name: str = ""):
+        self._samples   = []
+        self._car_name  = car_name
+        self._recording = True
+
+    def stop(self) -> Optional[Path]:
+        """Stop recording and save to disk.  Returns the path, or None if empty."""
+        self._recording = False
+        if not self._samples:
+            return None
+        RECORDINGS_DIR.mkdir(exist_ok=True)
+        ts       = datetime.now().strftime("%Y%m%d_%H%M%S")
+        safe_car = "".join(c if c.isalnum() or c in "-_ " else "_"
+                           for c in self._car_name)
+        safe_car = safe_car.strip().replace(" ", "_") or "unknown"
+        path     = RECORDINGS_DIR / f"{safe_car}_{ts}.npz"
+        arr      = np.array(self._samples, dtype=np.float32)
+        np.savez_compressed(str(path), samples=arr,
+                            car=np.array([self._car_name]))
+        self._samples = []
+        return path
+
+    def discard(self):
+        """Cancel recording without saving."""
+        self._recording = False
+        self._samples   = []
+
+    def append(self, v: float):
+        if self._recording:
+            self._samples.append(v)
+
+
 class IRacingThread(QThread):
     sample_ready    = pyqtSignal(float)
     status_changed  = pyqtSignal(str)
@@ -517,6 +582,60 @@ class IRacingThread(QThread):
         self.wait(2000)
 
 
+class ReplayThread(QThread):
+    """Plays back a .npz telemetry recording at real-time 360 Hz.
+
+    Exposes exactly the same signals as IRacingThread so it can be wired
+    into the pipeline without any changes to FFTProcessor or the UI slots.
+    """
+    sample_ready   = pyqtSignal(float)
+    status_changed = pyqtSignal(str)
+    car_detected   = pyqtSignal(str)
+    crash_detected = pyqtSignal(float, float)   # unused — keeps interface identical
+    feed_paused    = pyqtSignal()
+    lap_completed  = pyqtSignal(int, float)     # unused
+    rpm_ready      = pyqtSignal(dict)           # unused
+    progress       = pyqtSignal(int, int)       # current_idx, total_samples
+
+    def __init__(self, samples: np.ndarray, car_name: str = ""):
+        super().__init__()
+        self._samples  = samples
+        self._car_name = car_name
+        self._running  = True
+        self.speed_mph = 0.0
+
+    def run(self):
+        total = len(self._samples)
+        dur_s = total / SAMPLE_RATE
+        self.status_changed.emit(
+            f"Replay  —  {total:,} samples  ({dur_s:.1f} s)")
+        if self._car_name:
+            self.car_detected.emit(self._car_name)
+
+        dt   = 1.0 / SAMPLE_RATE
+        tick = time.monotonic()
+
+        for i, v in enumerate(self._samples):
+            if not self._running:
+                break
+            self.sample_ready.emit(float(v))
+            # Emit progress every second of playback
+            if i % SAMPLE_RATE == 0:
+                self.progress.emit(i, total)
+            tick += dt
+            gap = tick - time.monotonic()
+            if gap > 0:
+                time.sleep(gap)
+
+        self.progress.emit(total, total)
+        self.feed_paused.emit()
+        self.status_changed.emit("Replay complete")
+
+    def stop(self):
+        self._running = False
+        self.wait(3000)
+
+
 # ── FFT processor ─────────────────────────────────────────────────────────────
 class FFTProcessor(QObject):
     spectrum_ready = pyqtSignal(object, object, object, float)
@@ -548,6 +667,9 @@ class FFTProcessor(QObject):
         self.moza_dsp          = RealtimeDSP()
         self._moza_raw_sm_st   = 0.0    # running IIR state: smoothed raw (delta mode)
 
+        # Telemetry recorder — set to a TelemetryRecorder instance to capture samples
+        self._recorder: Optional[TelemetryRecorder] = None
+
         # Fade-out state
         self._fade_active  = False
         self._fade_hold    = 0    # samples remaining in hold phase
@@ -555,7 +677,9 @@ class FFTProcessor(QObject):
         self._last_sample  = 0.0  # last real sample value (held during fade)
 
     def set_bands(self, bands):
-        self.active_bands = bands
+        # Snapshot: shallow-copy each EQBand so UI mutations mid-chunk can't
+        # corrupt the filter parameters being read on the iRacing worker thread.
+        self.active_bands = [copy.copy(b) for b in bands]
 
     def begin_fade(self):
         """Start the 500 ms hold + 1 s fade-out sequence."""
@@ -574,6 +698,10 @@ class FFTProcessor(QObject):
         if self._fade_active:
             self._cancel_fade()
         self._last_sample = v
+
+        # Record raw sample before any DSP processing
+        if self._recorder is not None:
+            self._recorder.append(v)
 
         # ── MOZA ET output — full 360 Hz, sample-by-sample ───────────────────
         # Run a separate moza_dsp instance so the display DSP (_flush_chunk,
@@ -655,13 +783,24 @@ class FFTProcessor(QObject):
         data_raw = np.array(self._raw_buf) - np.mean(self._raw_buf)
         mag_raw  = np.abs(np.fft.rfft(data_raw * self._window)) / (FFT_SIZE / 2)
         raw_db   = 20.0 * np.log10(np.maximum(mag_raw, 1e-10))
-        self._smooth_raw = (raw_db if self._smooth_raw is None else EMA_ALPHA * raw_db + (1 - EMA_ALPHA) * self._smooth_raw)
+        if self._smooth_raw is None:
+            self._smooth_raw = raw_db
+        else:
+            # In-place EMA: no temporary array allocated
+            self._smooth_raw *= (1.0 - EMA_ALPHA)
+            raw_db           *= EMA_ALPHA
+            self._smooth_raw += raw_db
 
         # FX
         data_fx = np.array(self._fx_buf) - np.mean(self._fx_buf)
         mag_fx  = np.abs(np.fft.rfft(data_fx * self._window)) / (FFT_SIZE / 2)
         fx_db   = 20.0 * np.log10(np.maximum(mag_fx, 1e-10))
-        self._smooth_fx = (fx_db if self._smooth_fx is None else EMA_ALPHA * fx_db + (1 - EMA_ALPHA) * self._smooth_fx)
+        if self._smooth_fx is None:
+            self._smooth_fx = fx_db
+        else:
+            self._smooth_fx *= (1.0 - EMA_ALPHA)
+            fx_db           *= EMA_ALPHA
+            self._smooth_fx += fx_db
 
         self.spectrum_ready.emit(self.freq_bins, self._smooth_raw.copy(), self._smooth_fx.copy(), float(np.sqrt(np.mean(data_raw**2))))
         # DISABLED: self.modal_ready.emit(self.freq_bins, mag_raw, data_raw)
@@ -1221,6 +1360,11 @@ class MainWindow(QMainWindow):
         self._review_win       = None
         self._current_eq_gain_db = None
 
+        # Telemetry recording / replay state
+        self._recorder         = TelemetryRecorder()
+        self._current_car      = ""
+        self._replay_thread: Optional[ReplayThread] = None
+
         # DISABLED: MiniOverlayWindow
         # self._overlay_win      = MiniOverlayWindow()
         # self._overlay_win.gain_changed.connect(self._on_overlay_gain)
@@ -1230,8 +1374,11 @@ class MainWindow(QMainWindow):
         # Precompute truncated bin count matching FFTProcessor output
         # Full Nyquist bin count — matches FFTProcessor output
         n_bins = FFT_SIZE // 2 + 1
-        # Store waterfall in native (freq, time) orientation — no .T needed
-        self._wf_buf = np.full((n_bins, WATERFALL_ROWS), -80.0, dtype=np.float32)
+        # Circular waterfall buffer — avoids np.roll allocation every frame.
+        # _wf_head is the next write column (newest → col 0 in display).
+        self._wf_buf     = np.full((n_bins, WATERFALL_ROWS), -80.0, dtype=np.float32)
+        self._wf_display = np.empty((n_bins, WATERFALL_ROWS), dtype=np.float32)
+        self._wf_head    = 0
 
         pg.setConfigOptions(antialias=True, background="#0d0d0d")
         self._build_ui()
@@ -1454,18 +1601,7 @@ class MainWindow(QMainWindow):
             "QPushButton:hover{border-color:#ffcc44;}")
         band_row.addWidget(self._detect_btn)
         
-        self._assign_btn = QPushButton("Bind Wheel Button")
-        self._assign_btn.setFixedWidth(130)
-        self._assign_btn.clicked.connect(self._start_assign)
-        band_row.addWidget(self._assign_btn)
-
-        note = QLabel(
-            "Dotted = individual bands  |  Dashed white = combined response  |  "
-            "MOZA direct output: see Global FX panel"
-        )
-        note.setStyleSheet("color:#555; font-size:10px; font-style:italic;")
-        note.setWordWrap(True)
-        band_row.addWidget(note, 1)
+        band_row.addStretch()
         eq_vb.addLayout(band_row)
 
         # Band list
@@ -1484,189 +1620,119 @@ class MainWindow(QMainWindow):
 
         bot_split.addWidget(eq_box)
 
-        from PyQt6.QtWidgets import QFormLayout
-        fx_box = QGroupBox("Global FX")
+        fx_box = QGroupBox("DSP / Output")
         fx_vb = QVBoxLayout(fx_box)
-        fx_vb.setContentsMargins(6,14,6,6)
-        
-        form = QFormLayout()
+        fx_vb.setContentsMargins(4, 14, 4, 4)
 
-        # ── Master (Output) Gain — always last in signal chain ─────────────────
-        gn_box = QHBoxLayout()
+        tabs = QTabWidget()
+        fx_vb.addWidget(tabs)
+
+        # ── Tab 1: DSP — core signal chain ───────────────────────────
+        dsp_w    = QWidget()
+        dsp_form = QFormLayout(dsp_w)
+        dsp_form.setContentsMargins(6, 6, 6, 6); dsp_form.setSpacing(4)
+
         self._master_gain = QDoubleSpinBox()
-        self._master_gain.setRange(-48.0, 24.0)
-        self._master_gain.setSingleStep(0.1)
-        self._master_gain.setSuffix(" dB")
+        self._master_gain.setRange(-48.0, 24.0); self._master_gain.setSingleStep(0.1); self._master_gain.setSuffix(" dB")
         self._master_gain.setToolTip("Output gain applied after EQ and compressor")
         self._master_gain.valueChanged.connect(self._sync_dsp)
-        gn_box.addWidget(self._master_gain)
+        dsp_form.addRow("Master Gain:", self._master_gain)
 
-        self._gain_up_btn = QPushButton("Bind Up")
-        self._gain_up_btn.clicked.connect(self._start_assign_gain_up)
-        gn_box.addWidget(self._gain_up_btn)
-
-        self._gain_down_btn = QPushButton("Bind Dn")
-        self._gain_down_btn.clicked.connect(self._start_assign_gain_down)
-        gn_box.addWidget(self._gain_down_btn)
-
-        form.addRow("Master Gain:", gn_box)
-
-        self._wf_transform = QComboBox()
-        self._wf_transform.addItems(["Normal", "dy/dx (Time Diff)"])
-        self._wf_transform.setToolTip("Computes delta of spectrum over time for waterfall (highlights changes)")
-        self._wf_transform.currentIndexChanged.connect(self._sync_dsp)
-        form.addRow("Waterfall:", self._wf_transform)
-
-        fline = QFrame(); fline.setFrameShape(QFrame.Shape.HLine); fline.setStyleSheet("color:#444;")
-        form.addRow(fline)
+        _d1 = QFrame(); _d1.setFrameShape(QFrame.Shape.HLine); _d1.setStyleSheet("color:#333;")
+        dsp_form.addRow(_d1)
 
         self._comp_thr = QDoubleSpinBox()
         self._comp_thr.setRange(-80.0, 0.0); self._comp_thr.setSingleStep(1.0); self._comp_thr.setSuffix(" dB"); self._comp_thr.setValue(0.0)
         self._comp_thr.valueChanged.connect(self._sync_dsp)
-        form.addRow("Comp Thresh:", self._comp_thr)
+        dsp_form.addRow("Comp Thresh:", self._comp_thr)
 
         self._comp_ratio = QDoubleSpinBox()
         self._comp_ratio.setRange(1.0, 20.0); self._comp_ratio.setSingleStep(0.5); self._comp_ratio.setValue(1.0)
         self._comp_ratio.valueChanged.connect(self._sync_dsp)
-        form.addRow("Comp Ratio:", self._comp_ratio)
+        dsp_form.addRow("Comp Ratio:", self._comp_ratio)
 
         self._comp_att = QDoubleSpinBox()
         self._comp_att.setRange(1.0, 500.0); self._comp_att.setSingleStep(10); self._comp_att.setValue(10); self._comp_att.setSuffix(" ms")
         self._comp_att.valueChanged.connect(self._sync_dsp)
-        form.addRow("Attack:", self._comp_att)
+        dsp_form.addRow("Attack:", self._comp_att)
 
         self._comp_rel = QDoubleSpinBox()
         self._comp_rel.setRange(10.0, 2000.0); self._comp_rel.setSingleStep(20); self._comp_rel.setValue(50); self._comp_rel.setSuffix(" ms")
         self._comp_rel.valueChanged.connect(self._sync_dsp)
-        form.addRow("Release:", self._comp_rel)
+        dsp_form.addRow("Release:", self._comp_rel)
 
-        fline2 = QFrame(); fline2.setFrameShape(QFrame.Shape.HLine); fline2.setStyleSheet("color:#444;")
-        form.addRow(fline2)
+        _d2 = QFrame(); _d2.setFrameShape(QFrame.Shape.HLine); _d2.setStyleSheet("color:#333;")
+        dsp_form.addRow(_d2)
 
         self._octaver_blend = QDoubleSpinBox()
         self._octaver_blend.setRange(0.0, 1.0); self._octaver_blend.setSingleStep(0.05); self._octaver_blend.setValue(0.0)
         self._octaver_blend.valueChanged.connect(self._sync_dsp)
-        form.addRow("Octaver Blend:", self._octaver_blend)
+        dsp_form.addRow("Octaver Blend:", self._octaver_blend)
 
-        fline3 = QFrame(); fline3.setFrameShape(QFrame.Shape.HLine); fline3.setStyleSheet("color:#444;")
-        form.addRow(fline3)
+        _d3 = QFrame(); _d3.setFrameShape(QFrame.Shape.HLine); _d3.setStyleSheet("color:#333;")
+        dsp_form.addRow(_d3)
 
-        # ── v2: Slew-rate limiter ─────────────────────────────
         self._slew_delta = QDoubleSpinBox()
         self._slew_delta.setRange(0.0, 5.0); self._slew_delta.setSingleStep(0.05); self._slew_delta.setValue(0.0)
         self._slew_delta.setSuffix(" Nm/smp")
         self._slew_delta.setToolTip("Max Nm change per sample. 0 = disabled.\n"
                                     "Kills whiplash spikes. Try 0.5–2.0 Nm/sample.")
         self._slew_delta.valueChanged.connect(self._sync_dsp)
-        form.addRow("Slew Limit:", self._slew_delta)
+        dsp_form.addRow("Slew Limit:", self._slew_delta)
 
-        # ── v2: Crash / curb protection ───────────────────────
-        crash_row = QHBoxLayout()
-        self._crash_thr = QDoubleSpinBox()
-        self._crash_thr.setRange(1.0, 30.0); self._crash_thr.setSingleStep(0.5); self._crash_thr.setValue(8.0)
-        self._crash_thr.setSuffix(" m/s²")
-        self._crash_thr.setToolTip("G-force threshold (m/s²) above which crash protection triggers")
-        crash_row.addWidget(self._crash_thr)
-
-        self._crash_reduce = QDoubleSpinBox()
-        self._crash_reduce.setRange(0.0, 1.0); self._crash_reduce.setSingleStep(0.05); self._crash_reduce.setValue(0.3)
-        self._crash_reduce.setToolTip("Output gain multiplier during crash event (0 = mute, 1 = no duck)")
-        crash_row.addWidget(QLabel("Duck:"))
-        crash_row.addWidget(self._crash_reduce)
-
-        self._crash_dur = QDoubleSpinBox()
-        self._crash_dur.setRange(0.1, 5.0); self._crash_dur.setSingleStep(0.1); self._crash_dur.setValue(1.0)
-        self._crash_dur.setSuffix(" s")
-        self._crash_dur.setToolTip("How long to hold the gain reduction after a crash")
-        crash_row.addWidget(QLabel("Hold:"))
-        crash_row.addWidget(self._crash_dur)
-        form.addRow("Crash Prot:", crash_row)
-
-        # Crash protection state
-        self._crash_timer = QTimer()
-        self._crash_timer.setSingleShot(True)
-        self._crash_timer.timeout.connect(self._crash_release)
-
-        fline4 = QFrame(); fline4.setFrameShape(QFrame.Shape.HLine); fline4.setStyleSheet("color:#444;")
-        form.addRow(fline4)
-
-        # ── v2: Output curve ────────────────────────────────
         self._out_curve = QDoubleSpinBox()
         self._out_curve.setRange(0.0, 1.0); self._out_curve.setSingleStep(0.05); self._out_curve.setValue(0.0)
-        self._out_curve.setToolTip("Output shaping curve. 0 = linear, 1 = full tanh soft-clip.\n"
-                                   "Compresses peaks while preserving low-force feel.")
+        self._out_curve.setToolTip("Output shaping. 0 = linear, 1 = full tanh soft-clip.")
         self._out_curve.valueChanged.connect(self._sync_dsp)
-        form.addRow("Out Curve:", self._out_curve)
+        dsp_form.addRow("Out Curve:", self._out_curve)
 
-        # ── v2: Output smoothing ────────────────────────────
         self._out_smooth = QDoubleSpinBox()
         self._out_smooth.setRange(0.0, 0.99); self._out_smooth.setSingleStep(0.05); self._out_smooth.setValue(0.0)
-        self._out_smooth.setToolTip("Single-pole low-pass on output (0 = off, 0.9 = heavy smoothing).\n"
-                                    "Softens feel. Acts like irFFB output smoothing.")
+        self._out_smooth.setToolTip("Single-pole LP on output (0 = off, 0.9 = heavy).")
         self._out_smooth.valueChanged.connect(self._sync_dsp)
-        form.addRow("Out Smooth:", self._out_smooth)
+        dsp_form.addRow("Out Smooth:", self._out_smooth)
 
-        # ── Direct FFB Output ─────────────────────────────
-        fline5 = QFrame(); fline5.setFrameShape(QFrame.Shape.HLine); fline5.setStyleSheet("color:#444;")
-        form.addRow(fline5)
+        tabs.addTab(dsp_w, "DSP")
 
-        moza_row = QHBoxLayout()
+        # ── Tab 2: Output — hardware FFB output ──────────────────────
+        out_w    = QWidget()
+        out_form = QFormLayout(out_w)
+        out_form.setContentsMargins(6, 6, 6, 6); out_form.setSpacing(4)
+
         self._moza_toggle = QPushButton("Direct Output: OFF")
         self._moza_toggle.setCheckable(True)
-        self._moza_toggle.setFixedWidth(160)
         self._moza_toggle.setToolTip(
             "Send processed FFB directly to wheel via DirectInput (exclusive access).\n"
-            "Works regardless of iRacing FFB slider setting.\n"
             "Requires dinput_bridge.dll (run build_dinput_bridge.bat).\n"
-            "Pit House must be running.  Set iRacing FFB to 0% in-game."
-        )
+            "Pit House must be running.  Set iRacing FFB to 0% in-game.")
         self._moza_toggle.toggled.connect(self._toggle_moza_output)
-        moza_row.addWidget(self._moza_toggle)
+        out_form.addRow("Enable:", self._moza_toggle)
 
-        # Wheelbase physical max — scaling reference, NOT a volume knob.
-        # R12 V2 = 12 Nm.  Changing this does NOT limit output; it sets
-        # the denominator for the DI magnitude conversion.
+        # Wheelbase physical max — scaling reference, not an output limiter.
         self._moza_torque = QDoubleSpinBox()
         self._moza_torque.setRange(1.0, 25.0); self._moza_torque.setSingleStep(0.5)
         self._moza_torque.setValue(12.0); self._moza_torque.setSuffix(" Nm")
         self._moza_torque.setToolTip(
-            "Physical max torque of your wheelbase.\n"
-            "R12 V2 = 12 Nm  |  R9 = 9 Nm  |  R5 = 5.5 Nm\n"
-            "⚠ This is a SCALING REFERENCE, not an output limiter.\n"
-            "Use the ET Output % slider to control actual strength.")
-        moza_row.addWidget(QLabel("WB max:"))
-        moza_row.addWidget(self._moza_torque)
+            "Physical max torque of your wheelbase (scaling reference).\n"
+            "R12 V2 = 12 Nm  |  R9 = 9 Nm  |  R5 = 5.5 Nm")
+        out_form.addRow("WB Max:", self._moza_torque)
 
-        # Output scale — the REAL volume knob (0–100 %, default 25 %).
-        # Multiplied into every sample before magnitude conversion.
-        # Hardcoded DLL clamp: ±10 Nm regardless of this setting.
+        # Output scale — actual volume control (0–100 %, default 25 %).
         self._moza_scale = QDoubleSpinBox()
         self._moza_scale.setRange(0.0, 100.0); self._moza_scale.setSingleStep(5.0)
         self._moza_scale.setValue(25.0); self._moza_scale.setSuffix(" %")
         self._moza_scale.setToolTip(
-            "ET channel output strength (0 = silent, 100 = full scale).\n"
-            "Start low (25 %) and work up.  DLL hard-clamps at ±10 Nm.")
+            "ET channel output strength (0 = silent, 100 = full).\n"
+            "Start at 25 % and work up.  DLL hard-clamps at ±10 Nm.")
         self._moza_scale.valueChanged.connect(self._on_moza_scale_changed)
-        moza_row.addWidget(QLabel("ET Output:"))
-        moza_row.addWidget(self._moza_scale)
-        form.addRow("FFB Out:", moza_row)
+        out_form.addRow("ET Output:", self._moza_scale)
 
         self._moza_status = QLabel("")
         self._moza_status.setStyleSheet("color:#888; font-size:9px; font-family:Consolas;")
-        form.addRow("", self._moza_status)
+        self._moza_status.setWordWrap(True)
+        out_form.addRow("", self._moza_status)
 
-        self._moza_mode = QComboBox()
-        self._moza_mode.addItems(["Delta (EQ correction only)", "Full replace (iRacing FFB = 0)"])
-        self._moza_mode.setToolTip(
-            "Delta: sends EQ(signal) - signal via ET channel.\n"
-            "  Pit House runs game FFB normally; we add the correction on top.\n"
-            "  iRacing FFB must be ON in Pit House.\n\n"
-            "Full replace: sends entire EQ'd signal.\n"
-            "  Set iRacing FFB to 0% in Pit House so it doesn't double-up.")
-        self._moza_mode.currentIndexChanged.connect(self._on_moza_mode_changed)
-        form.addRow("Mode:", self._moza_mode)
-
-        # MOZA SDK bridge (primary — routes through Pit House, no device conflict)
+        # Initialise hardware output object (needs _moza_status to exist first)
         self._moza = None
         if MOZA_AVAILABLE:
             self._moza = MozaFFBOutput(max_torque_nm=12.0)
@@ -1682,81 +1748,176 @@ class MainWindow(QMainWindow):
                 self._moza_toggle.setEnabled(False)
             else:
                 self._moza_status.setText("DirectInput bridge ready (non-exclusive)")
+        elif NULL_AVAILABLE:
+            self._moza = NullFFBOutput(max_torque_nm=12.0)
+            self._moza_status.setText(
+                "Null output (safe mode) — DSP runs normally, no torque sent to hardware")
         else:
             self._moza_status.setText("No FFB bridge — run build_bridge.bat")
             self._moza_toggle.setEnabled(False)
 
-        # ── Pit House EQ control (no device conflict) ──────────
-        fline6 = QFrame(); fline6.setFrameShape(QFrame.Shape.HLine); fline6.setStyleSheet("color:#444;")
-        form.addRow(fline6)
+        self._moza_mode = QComboBox()
+        self._moza_mode.addItems(["Delta (EQ correction only)", "Full replace (iRacing FFB = 0)"])
+        self._moza_mode.setToolTip(
+            "Delta: adds EQ correction on top of Pit House game FFB.\n"
+            "Full replace: sends the full EQ'd signal (set iRacing FFB to 0% in PH).")
+        self._moza_mode.currentIndexChanged.connect(self._on_moza_mode_changed)
+        out_form.addRow("Mode:", self._moza_mode)
+
+        _o1 = QFrame(); _o1.setFrameShape(QFrame.Shape.HLine); _o1.setStyleSheet("color:#333;")
+        out_form.addRow(_o1)
 
         ph_row = QHBoxLayout()
         self._ph_init_btn = QPushButton("Connect SDK")
         self._ph_init_btn.setFixedWidth(100)
         self._ph_init_btn.setToolTip(
-            "Initialise MOZA SDK (no device lock taken).\n"
-            "Allows pushing EQ settings directly to Pit House motor.\n"
-            "Works while iRacing is running — no ownership conflict.")
+            "Initialise MOZA SDK (no device lock).\n"
+            "Allows pushing EQ to Pit House motor without ownership conflict.")
         self._ph_init_btn.clicked.connect(self._ph_sdk_init)
         ph_row.addWidget(self._ph_init_btn)
 
         self._ph_push_btn = QPushButton("Push EQ →")
         self._ph_push_btn.setFixedWidth(80)
-        self._ph_push_btn.setToolTip("Push current parametric EQ as 6-band settings to Pit House motor.")
+        self._ph_push_btn.setToolTip("Push parametric EQ as 6-band settings to Pit House motor.")
         self._ph_push_btn.clicked.connect(self._ph_push_eq)
         self._ph_push_btn.setEnabled(False)
         ph_row.addWidget(self._ph_push_btn)
 
         self._ph_reset_btn = QPushButton("Reset EQ")
-        self._ph_reset_btn.setFixedWidth(70)
+        self._ph_reset_btn.setFixedWidth(72)
         self._ph_reset_btn.setToolTip("Reset Pit House motor EQ to unity (all bands = 100).")
         self._ph_reset_btn.clicked.connect(self._ph_reset_eq)
         self._ph_reset_btn.setEnabled(False)
         ph_row.addWidget(self._ph_reset_btn)
 
-        self._ph_autosync = QCheckBox("Auto-sync")
+        self._ph_autosync = QCheckBox("Auto")
         self._ph_autosync.setToolTip("Push EQ to Pit House automatically whenever bands change.")
         self._ph_autosync.setEnabled(False)
         ph_row.addWidget(self._ph_autosync)
-        form.addRow("PH EQ:", ph_row)
+        out_form.addRow("PH EQ:", ph_row)
 
         self._ph_status = QLabel("SDK not connected")
         self._ph_status.setStyleSheet("color:#555; font-size:9px; font-family:Consolas;")
-        form.addRow("", self._ph_status)
+        self._ph_status.setWordWrap(True)
+        out_form.addRow("", self._ph_status)
 
-        self._ph_sdk_ready = False  # set True after successful sdk_init
+        self._ph_sdk_ready = False
 
-        # ── Test tone ──────────────────────────────────────────
+        tabs.addTab(out_w, "Output")
+
+        # ── Tab 3: Tools — diagnostics, wheel bindings, protection ───
+        tools_w    = QWidget()
+        tools_form = QFormLayout(tools_w)
+        tools_form.setContentsMargins(6, 6, 6, 6); tools_form.setSpacing(4)
+
+        self._wf_transform = QComboBox()
+        self._wf_transform.addItems(["Normal", "dy/dx (Time Diff)"])
+        self._wf_transform.setToolTip("Waterfall display mode:\n"
+                                      "Normal = raw spectrum\n"
+                                      "dy/dx = highlights spectral changes over time")
+        tools_form.addRow("Waterfall:", self._wf_transform)
+
+        _t1 = QFrame(); _t1.setFrameShape(QFrame.Shape.HLine); _t1.setStyleSheet("color:#333;")
+        tools_form.addRow(_t1)
+
+        crash_row = QHBoxLayout()
+        self._crash_thr = QDoubleSpinBox()
+        self._crash_thr.setRange(1.0, 30.0); self._crash_thr.setSingleStep(0.5); self._crash_thr.setValue(8.0)
+        self._crash_thr.setSuffix(" m/s²")
+        self._crash_thr.setToolTip("G-force threshold above which crash protection triggers")
+        crash_row.addWidget(self._crash_thr)
+        self._crash_reduce = QDoubleSpinBox()
+        self._crash_reduce.setRange(0.0, 1.0); self._crash_reduce.setSingleStep(0.05); self._crash_reduce.setValue(0.3)
+        self._crash_reduce.setToolTip("Output gain during crash (0 = mute, 1 = no reduction)")
+        crash_row.addWidget(QLabel("Duck:"))
+        crash_row.addWidget(self._crash_reduce)
+        self._crash_dur = QDoubleSpinBox()
+        self._crash_dur.setRange(0.1, 5.0); self._crash_dur.setSingleStep(0.1); self._crash_dur.setValue(1.0)
+        self._crash_dur.setSuffix(" s")
+        self._crash_dur.setToolTip("Duration of gain reduction after impact")
+        crash_row.addWidget(QLabel("Hold:"))
+        crash_row.addWidget(self._crash_dur)
+        tools_form.addRow("Crash Prot:", crash_row)
+
+        self._crash_timer = QTimer()
+        self._crash_timer.setSingleShot(True)
+        self._crash_timer.timeout.connect(self._crash_release)
+
+        _t2 = QFrame(); _t2.setFrameShape(QFrame.Shape.HLine); _t2.setStyleSheet("color:#333;")
+        tools_form.addRow(_t2)
+
+        btn_row = QHBoxLayout()
+        self._assign_btn = QPushButton("Bind Listen")
+        self._assign_btn.setFixedWidth(90)
+        self._assign_btn.setToolTip("Bind a wheel button to toggle Listen / Detect Peaks mode.")
+        self._assign_btn.clicked.connect(self._start_assign)
+        btn_row.addWidget(self._assign_btn)
+        self._gain_up_btn = QPushButton("Bind Gain ▲")
+        self._gain_up_btn.setFixedWidth(90)
+        self._gain_up_btn.clicked.connect(self._start_assign_gain_up)
+        btn_row.addWidget(self._gain_up_btn)
+        self._gain_down_btn = QPushButton("Bind Gain ▼")
+        self._gain_down_btn.setFixedWidth(90)
+        self._gain_down_btn.clicked.connect(self._start_assign_gain_down)
+        btn_row.addWidget(self._gain_down_btn)
+        tools_form.addRow("Buttons:", btn_row)
+
+        _t3 = QFrame(); _t3.setFrameShape(QFrame.Shape.HLine); _t3.setStyleSheet("color:#333;")
+        tools_form.addRow(_t3)
+
         tone_row = QHBoxLayout()
-        self._tone_btn = QPushButton("▶ Test Tone  (30 Hz / 3 Nm)")
+        self._tone_btn = QPushButton("▶ Test Tone")
         self._tone_btn.setCheckable(True)
         self._tone_btn.setToolTip(
-            "Inject a 30 Hz sine at 3 Nm directly through the DSP → MOZA output.\n"
-            "Bypasses iRacing — use to verify the output path works independently.\n"
-            "Visible as a spike at 30 Hz in the spectrum.")
+            "Injects a sine tone directly to the output — bypasses iRacing.\n"
+            "Use to verify the output path is alive.")
         self._tone_btn.toggled.connect(self._toggle_test_tone)
         tone_row.addWidget(self._tone_btn)
-
         self._tone_freq = QDoubleSpinBox()
         self._tone_freq.setRange(0.5, 100.0); self._tone_freq.setSingleStep(1.0)
-        self._tone_freq.setValue(30.0); self._tone_freq.setSuffix(" Hz")
-        self._tone_freq.setFixedWidth(78)
-        tone_row.addWidget(QLabel("f:"))
-        tone_row.addWidget(self._tone_freq)
-
+        self._tone_freq.setValue(30.0); self._tone_freq.setSuffix(" Hz"); self._tone_freq.setFixedWidth(78)
+        tone_row.addWidget(QLabel("f:")); tone_row.addWidget(self._tone_freq)
         self._tone_amp = QDoubleSpinBox()
         self._tone_amp.setRange(0.1, 12.0); self._tone_amp.setSingleStep(0.5)
-        self._tone_amp.setValue(3.0); self._tone_amp.setSuffix(" Nm")
-        self._tone_amp.setFixedWidth(72)
-        tone_row.addWidget(QLabel("amp:"))
-        tone_row.addWidget(self._tone_amp)
-        form.addRow("Debug:", tone_row)
+        self._tone_amp.setValue(3.0); self._tone_amp.setSuffix(" Nm"); self._tone_amp.setFixedWidth(72)
+        tone_row.addWidget(QLabel("amp:")); tone_row.addWidget(self._tone_amp)
+        tools_form.addRow("Test Tone:", tone_row)
 
-        # Test tone state (initialised here; timer created in _start_pipeline)
         self._tone_phase = 0.0
 
-        fx_vb.addLayout(form)
-        fx_vb.addStretch()
+        # ── Telemetry Recording ───────────────────────────────────────────────
+        _t4 = QFrame(); _t4.setFrameShape(QFrame.Shape.HLine)
+        _t4.setStyleSheet("color:#333;")
+        tools_form.addRow(_t4)
+
+        rec_row = QHBoxLayout()
+        self._rec_btn = QPushButton("⏺  Record")
+        self._rec_btn.setCheckable(True)
+        self._rec_btn.setToolTip(
+            "Record raw torque samples from iRacing (or demo mode) to disk.\n"
+            "Toggle off to stop and save.  File saved to recordings/.")
+        self._rec_btn.toggled.connect(self._toggle_telem_record)
+        rec_row.addWidget(self._rec_btn)
+        self._rec_lbl = QLabel("0 samples")
+        self._rec_lbl.setStyleSheet("color:#888; font-size:9px; font-family:Consolas;")
+        rec_row.addWidget(self._rec_lbl)
+        rec_row.addStretch()
+        tools_form.addRow("Record:", rec_row)
+
+        replay_row = QHBoxLayout()
+        self._replay_btn = QPushButton("▶  Load && Replay")
+        self._replay_btn.setToolTip(
+            "Open a .npz recording and feed it back through the full DSP pipeline.\n"
+            "iRacing does not need to be running.")
+        self._replay_btn.clicked.connect(self._load_replay)
+        replay_row.addWidget(self._replay_btn)
+        self._replay_lbl = QLabel("")
+        self._replay_lbl.setStyleSheet("color:#888; font-size:9px; font-family:Consolas;")
+        replay_row.addWidget(self._replay_lbl)
+        replay_row.addStretch()
+        tools_form.addRow("Replay:", replay_row)
+
+        tabs.addTab(tools_w, "Tools")
 
         bot_split.addWidget(fx_box)
 
@@ -1806,6 +1967,7 @@ class MainWindow(QMainWindow):
     # ── Pipeline ──────────────────────────────────────────────────────────────
     def _start_pipeline(self):
         self._proc      = FFTProcessor()
+        self._proc._recorder = self._recorder   # wire shared recorder into DSP path
         self._ir_thread = IRacingThread()
         self._joy_thread = JoystickThread()
 
@@ -1868,6 +2030,7 @@ class MainWindow(QMainWindow):
 
     # ── Slots ─────────────────────────────────────────────────────────────────
     def _on_car_detected(self, car_name: str):
+        self._current_car = car_name
         self._status.setText(self._status.text() + f"  [Car: {car_name}]")
         self._preset_name.setText(car_name)
         # DISABLED: self._lap_log.set_car(car_name)
@@ -1894,6 +2057,66 @@ class MainWindow(QMainWindow):
             "preset":     self._preset_name.text(),
         }
         # DISABLED: self._lap_log.add_lap(lap_num, lap_time, settings)
+
+    # ── Telemetry record / replay ─────────────────────────────────────────────
+    def _toggle_telem_record(self, checked: bool):
+        if checked:
+            self._recorder.start(car_name=self._current_car)
+            self._rec_btn.setText("⏹  Stop & Save")
+            self._rec_lbl.setText("recording…")
+        else:
+            path = self._recorder.stop()
+            self._rec_btn.setText("⏺  Record")
+            if path:
+                name = path.name
+                self._rec_lbl.setText(f"saved: {name}")
+            else:
+                self._rec_lbl.setText("nothing recorded")
+
+    def _load_replay(self):
+        from PyQt6.QtWidgets import QFileDialog
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Open Telemetry Recording",
+            str(RECORDINGS_DIR if RECORDINGS_DIR.exists() else Path.home()),
+            "NPZ files (*.npz)")
+        if not path:
+            return
+
+        # Stop any running replay first
+        if self._replay_thread is not None and self._replay_thread.isRunning():
+            self._replay_thread.stop()
+            self._replay_thread = None
+
+        # Stop the live iRacing thread so the two don't fight over add_sample
+        if hasattr(self, '_ir_thread') and self._ir_thread.isRunning():
+            self._ir_thread.stop()
+
+        try:
+            data    = np.load(path)
+            samples = data["samples"].astype(np.float32)
+            car     = str(data["car"][0]) if "car" in data else ""
+        except Exception as exc:
+            self._replay_lbl.setText(f"Error: {exc}")
+            return
+
+        self._replay_thread = ReplayThread(samples, car_name=car)
+        self._replay_thread.sample_ready.connect(
+            self._proc.add_sample, Qt.ConnectionType.DirectConnection)
+        self._replay_thread.status_changed.connect(self._on_status)
+        self._replay_thread.car_detected.connect(self._on_car_detected)
+        self._replay_thread.feed_paused.connect(self._proc.begin_fade)
+        self._replay_thread.progress.connect(self._on_replay_progress)
+        self._replay_thread.start()
+        self._replay_lbl.setText(f"playing: {Path(path).name}")
+
+    def _on_replay_progress(self, current: int, total: int):
+        if total == 0:
+            return
+        pct = current * 100 // total
+        elapsed = current / SAMPLE_RATE
+        total_s = total  / SAMPLE_RATE
+        self._replay_lbl.setText(
+            f"{elapsed:.0f} s / {total_s:.0f} s  ({pct}%)")
 
     def _on_status(self, msg: str):
         color = "#00ff88" if "Connected" in msg else "#ffaa00" if "DEMO" in msg else "#ff5555"
@@ -1930,6 +2153,14 @@ class MainWindow(QMainWindow):
         """Update live torque readout in header."""
         col_in  = "#00ff88" if peak_in  > 0.1 else "#555"
         col_out = "#00c8ff" if peak_out > 0.1 else "#555"
+        # Skip redraw if neither value nor colour changed (avoids HTML churn at 30 Hz)
+        if (col_in  == getattr(self, '_env_col_in',  None) and
+            col_out == getattr(self, '_env_col_out', None) and
+            abs(peak_in  - getattr(self, '_env_peak_in',  -1)) < 0.01 and
+            abs(peak_out - getattr(self, '_env_peak_out', -1)) < 0.01):
+            return
+        self._env_col_in   = col_in;  self._env_col_out  = col_out
+        self._env_peak_in  = peak_in; self._env_peak_out = peak_out
         self._torque_lbl.setText(
             f"<span style='color:{col_in}'>in: {peak_in:5.2f} Nm</span>"
             f"<span style='color:#444'>  |  </span>"
@@ -1971,9 +2202,15 @@ class MainWindow(QMainWindow):
         if getattr(self, '_wf_transform', None) is not None and self._wf_transform.currentIndex() == 1:
             wf_line = mag_db - (self._last_mag_db if self._last_mag_db is not None else mag_db)
 
-        self._wf_buf = np.roll(self._wf_buf, 1, axis=1)
-        self._wf_buf[:, 0] = wf_line
-        self._wf_img.setImage(self._wf_buf, autoLevels=False, autoDownsample=True)
+        # Circular-buffer write: decrement head so newest lands at col 0 in display.
+        self._wf_head = (self._wf_head - 1) % WATERFALL_ROWS
+        self._wf_buf[:, self._wf_head] = wf_line.astype(np.float32)
+        # Assemble display (newest→col 0) in-place — zero heap allocation.
+        h = self._wf_head
+        tail = WATERFALL_ROWS - h
+        self._wf_display[:, :tail] = self._wf_buf[:, h:]
+        self._wf_display[:, tail:] = self._wf_buf[:, :h]
+        self._wf_img.setImage(self._wf_display, autoLevels=False, autoDownsample=True)
 
         # DISABLED: record mode
         # if self._record_mode:
@@ -1988,6 +2225,11 @@ class MainWindow(QMainWindow):
         # Meter
         self._meter.set_value(rms)
         self._rms_lbl.setText(f"{rms:.1f} Nm")
+
+        # Update recording sample-count label every spectrum frame (~30 Hz)
+        if self._recorder.recording:
+            n = self._recorder.sample_count
+            self._rec_lbl.setText(f"{n:,} samples  ({n/SAMPLE_RATE:.1f} s)")
 
         # DISABLED: overlay update (overlay_win disabled)
         # if self._overlay_win is not None and self._overlay_win.isVisible():
@@ -2185,7 +2427,7 @@ class MainWindow(QMainWindow):
             # Zero the output immediately so torque doesn't stay stuck on wheel
             if self._moza is not None and self._moza.active:
                 self._moza.set_torque_nm(0.0)
-            self._tone_btn.setText("▶ Test Tone  (30 Hz / 3 Nm)")
+            self._tone_btn.setText("▶ Test Tone")
             self._tone_btn.setStyleSheet("")
 
     def _pump_test_tone(self):
@@ -2299,6 +2541,18 @@ class MainWindow(QMainWindow):
         If Pit House evicted our SDK handle, cleanly stops the old instance,
         waits one watchdog cycle (3 s) for Pit House to settle, then retries."""
         if self._moza is None:
+            return
+
+        # Null output: just show live throughput stats — no SDK to check.
+        if getattr(self._moza, 'IS_NULL', False):
+            if self._moza.active:
+                rate = self._moza.call_rate_hz
+                peak = self._moza.peak_nm
+                self._moza_status.setText(
+                    f"Null output — {rate:.0f} Hz  |  peak {peak:.2f} Nm  "
+                    f"(no hardware)")
+                self._moza_status.setStyleSheet(
+                    "color:#ffaa00; font-size:9px; font-family:Consolas;")
             return
 
         still_active = self._moza.active
