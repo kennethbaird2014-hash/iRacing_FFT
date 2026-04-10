@@ -75,8 +75,9 @@ EMA_ALPHA        = 0.20
 MAX_TORQUE_NM    = 20.0
 NYQUIST_60HZ     = 30.0     # marker: SDK default is 60 Hz → 30 Hz Nyquist
 
-PRESET_DIR = Path(__file__).parent / "presets"
-LOG_DIR    = Path(__file__).parent / "logs"
+PRESET_DIR      = Path(__file__).parent / "presets"
+LOG_DIR         = Path(__file__).parent / "logs"
+RECORDINGS_DIR  = Path(__file__).parent / "recordings"
 
 
 # ── EQ Band ───────────────────────────────────────────────────────────────────
@@ -337,6 +338,61 @@ class JoystickThread(QThread):
         self.wait(1000)
 
 # ── iRacing / demo thread ─────────────────────────────────────────────────────
+class TelemetryRecorder:
+    """Records raw steering-wheel torque samples from any source to an NPZ file.
+
+    Usage
+    -----
+    recorder.start(car_name="Porsche 911 GT3R")
+    # … FFTProcessor.add_sample() calls recorder.append(v) at 360 Hz …
+    path = recorder.stop()   # saves recordings/<car>_<timestamp>.npz
+    """
+
+    def __init__(self):
+        self._samples: list  = []
+        self._recording      = False
+        self._car_name       = ""
+
+    @property
+    def recording(self) -> bool:
+        return self._recording
+
+    @property
+    def sample_count(self) -> int:
+        return len(self._samples)
+
+    def start(self, car_name: str = ""):
+        self._samples   = []
+        self._car_name  = car_name
+        self._recording = True
+
+    def stop(self) -> Optional[Path]:
+        """Stop recording and save to disk.  Returns the path, or None if empty."""
+        self._recording = False
+        if not self._samples:
+            return None
+        RECORDINGS_DIR.mkdir(exist_ok=True)
+        ts       = datetime.now().strftime("%Y%m%d_%H%M%S")
+        safe_car = "".join(c if c.isalnum() or c in "-_ " else "_"
+                           for c in self._car_name)
+        safe_car = safe_car.strip().replace(" ", "_") or "unknown"
+        path     = RECORDINGS_DIR / f"{safe_car}_{ts}.npz"
+        arr      = np.array(self._samples, dtype=np.float32)
+        np.savez_compressed(str(path), samples=arr,
+                            car=np.array([self._car_name]))
+        self._samples = []
+        return path
+
+    def discard(self):
+        """Cancel recording without saving."""
+        self._recording = False
+        self._samples   = []
+
+    def append(self, v: float):
+        if self._recording:
+            self._samples.append(v)
+
+
 class IRacingThread(QThread):
     sample_ready    = pyqtSignal(float)
     status_changed  = pyqtSignal(str)
@@ -526,6 +582,60 @@ class IRacingThread(QThread):
         self.wait(2000)
 
 
+class ReplayThread(QThread):
+    """Plays back a .npz telemetry recording at real-time 360 Hz.
+
+    Exposes exactly the same signals as IRacingThread so it can be wired
+    into the pipeline without any changes to FFTProcessor or the UI slots.
+    """
+    sample_ready   = pyqtSignal(float)
+    status_changed = pyqtSignal(str)
+    car_detected   = pyqtSignal(str)
+    crash_detected = pyqtSignal(float, float)   # unused — keeps interface identical
+    feed_paused    = pyqtSignal()
+    lap_completed  = pyqtSignal(int, float)     # unused
+    rpm_ready      = pyqtSignal(dict)           # unused
+    progress       = pyqtSignal(int, int)       # current_idx, total_samples
+
+    def __init__(self, samples: np.ndarray, car_name: str = ""):
+        super().__init__()
+        self._samples  = samples
+        self._car_name = car_name
+        self._running  = True
+        self.speed_mph = 0.0
+
+    def run(self):
+        total = len(self._samples)
+        dur_s = total / SAMPLE_RATE
+        self.status_changed.emit(
+            f"Replay  —  {total:,} samples  ({dur_s:.1f} s)")
+        if self._car_name:
+            self.car_detected.emit(self._car_name)
+
+        dt   = 1.0 / SAMPLE_RATE
+        tick = time.monotonic()
+
+        for i, v in enumerate(self._samples):
+            if not self._running:
+                break
+            self.sample_ready.emit(float(v))
+            # Emit progress every second of playback
+            if i % SAMPLE_RATE == 0:
+                self.progress.emit(i, total)
+            tick += dt
+            gap = tick - time.monotonic()
+            if gap > 0:
+                time.sleep(gap)
+
+        self.progress.emit(total, total)
+        self.feed_paused.emit()
+        self.status_changed.emit("Replay complete")
+
+    def stop(self):
+        self._running = False
+        self.wait(3000)
+
+
 # ── FFT processor ─────────────────────────────────────────────────────────────
 class FFTProcessor(QObject):
     spectrum_ready = pyqtSignal(object, object, object, float)
@@ -557,6 +667,9 @@ class FFTProcessor(QObject):
         self.moza_dsp          = RealtimeDSP()
         self._moza_raw_sm_st   = 0.0    # running IIR state: smoothed raw (delta mode)
 
+        # Telemetry recorder — set to a TelemetryRecorder instance to capture samples
+        self._recorder: Optional[TelemetryRecorder] = None
+
         # Fade-out state
         self._fade_active  = False
         self._fade_hold    = 0    # samples remaining in hold phase
@@ -585,6 +698,10 @@ class FFTProcessor(QObject):
         if self._fade_active:
             self._cancel_fade()
         self._last_sample = v
+
+        # Record raw sample before any DSP processing
+        if self._recorder is not None:
+            self._recorder.append(v)
 
         # ── MOZA ET output — full 360 Hz, sample-by-sample ───────────────────
         # Run a separate moza_dsp instance so the display DSP (_flush_chunk,
@@ -1243,6 +1360,11 @@ class MainWindow(QMainWindow):
         self._review_win       = None
         self._current_eq_gain_db = None
 
+        # Telemetry recording / replay state
+        self._recorder         = TelemetryRecorder()
+        self._current_car      = ""
+        self._replay_thread: Optional[ReplayThread] = None
+
         # DISABLED: MiniOverlayWindow
         # self._overlay_win      = MiniOverlayWindow()
         # self._overlay_win.gain_changed.connect(self._on_overlay_gain)
@@ -1763,6 +1885,38 @@ class MainWindow(QMainWindow):
 
         self._tone_phase = 0.0
 
+        # ── Telemetry Recording ───────────────────────────────────────────────
+        _t4 = QFrame(); _t4.setFrameShape(QFrame.Shape.HLine)
+        _t4.setStyleSheet("color:#333;")
+        tools_form.addRow(_t4)
+
+        rec_row = QHBoxLayout()
+        self._rec_btn = QPushButton("⏺  Record")
+        self._rec_btn.setCheckable(True)
+        self._rec_btn.setToolTip(
+            "Record raw torque samples from iRacing (or demo mode) to disk.\n"
+            "Toggle off to stop and save.  File saved to recordings/.")
+        self._rec_btn.toggled.connect(self._toggle_telem_record)
+        rec_row.addWidget(self._rec_btn)
+        self._rec_lbl = QLabel("0 samples")
+        self._rec_lbl.setStyleSheet("color:#888; font-size:9px; font-family:Consolas;")
+        rec_row.addWidget(self._rec_lbl)
+        rec_row.addStretch()
+        tools_form.addRow("Record:", rec_row)
+
+        replay_row = QHBoxLayout()
+        self._replay_btn = QPushButton("▶  Load && Replay")
+        self._replay_btn.setToolTip(
+            "Open a .npz recording and feed it back through the full DSP pipeline.\n"
+            "iRacing does not need to be running.")
+        self._replay_btn.clicked.connect(self._load_replay)
+        replay_row.addWidget(self._replay_btn)
+        self._replay_lbl = QLabel("")
+        self._replay_lbl.setStyleSheet("color:#888; font-size:9px; font-family:Consolas;")
+        replay_row.addWidget(self._replay_lbl)
+        replay_row.addStretch()
+        tools_form.addRow("Replay:", replay_row)
+
         tabs.addTab(tools_w, "Tools")
 
         bot_split.addWidget(fx_box)
@@ -1813,6 +1967,7 @@ class MainWindow(QMainWindow):
     # ── Pipeline ──────────────────────────────────────────────────────────────
     def _start_pipeline(self):
         self._proc      = FFTProcessor()
+        self._proc._recorder = self._recorder   # wire shared recorder into DSP path
         self._ir_thread = IRacingThread()
         self._joy_thread = JoystickThread()
 
@@ -1875,6 +2030,7 @@ class MainWindow(QMainWindow):
 
     # ── Slots ─────────────────────────────────────────────────────────────────
     def _on_car_detected(self, car_name: str):
+        self._current_car = car_name
         self._status.setText(self._status.text() + f"  [Car: {car_name}]")
         self._preset_name.setText(car_name)
         # DISABLED: self._lap_log.set_car(car_name)
@@ -1901,6 +2057,66 @@ class MainWindow(QMainWindow):
             "preset":     self._preset_name.text(),
         }
         # DISABLED: self._lap_log.add_lap(lap_num, lap_time, settings)
+
+    # ── Telemetry record / replay ─────────────────────────────────────────────
+    def _toggle_telem_record(self, checked: bool):
+        if checked:
+            self._recorder.start(car_name=self._current_car)
+            self._rec_btn.setText("⏹  Stop & Save")
+            self._rec_lbl.setText("recording…")
+        else:
+            path = self._recorder.stop()
+            self._rec_btn.setText("⏺  Record")
+            if path:
+                name = path.name
+                self._rec_lbl.setText(f"saved: {name}")
+            else:
+                self._rec_lbl.setText("nothing recorded")
+
+    def _load_replay(self):
+        from PyQt6.QtWidgets import QFileDialog
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Open Telemetry Recording",
+            str(RECORDINGS_DIR if RECORDINGS_DIR.exists() else Path.home()),
+            "NPZ files (*.npz)")
+        if not path:
+            return
+
+        # Stop any running replay first
+        if self._replay_thread is not None and self._replay_thread.isRunning():
+            self._replay_thread.stop()
+            self._replay_thread = None
+
+        # Stop the live iRacing thread so the two don't fight over add_sample
+        if hasattr(self, '_ir_thread') and self._ir_thread.isRunning():
+            self._ir_thread.stop()
+
+        try:
+            data    = np.load(path)
+            samples = data["samples"].astype(np.float32)
+            car     = str(data["car"][0]) if "car" in data else ""
+        except Exception as exc:
+            self._replay_lbl.setText(f"Error: {exc}")
+            return
+
+        self._replay_thread = ReplayThread(samples, car_name=car)
+        self._replay_thread.sample_ready.connect(
+            self._proc.add_sample, Qt.ConnectionType.DirectConnection)
+        self._replay_thread.status_changed.connect(self._on_status)
+        self._replay_thread.car_detected.connect(self._on_car_detected)
+        self._replay_thread.feed_paused.connect(self._proc.begin_fade)
+        self._replay_thread.progress.connect(self._on_replay_progress)
+        self._replay_thread.start()
+        self._replay_lbl.setText(f"playing: {Path(path).name}")
+
+    def _on_replay_progress(self, current: int, total: int):
+        if total == 0:
+            return
+        pct = current * 100 // total
+        elapsed = current / SAMPLE_RATE
+        total_s = total  / SAMPLE_RATE
+        self._replay_lbl.setText(
+            f"{elapsed:.0f} s / {total_s:.0f} s  ({pct}%)")
 
     def _on_status(self, msg: str):
         color = "#00ff88" if "Connected" in msg else "#ffaa00" if "DEMO" in msg else "#ff5555"
@@ -2009,6 +2225,11 @@ class MainWindow(QMainWindow):
         # Meter
         self._meter.set_value(rms)
         self._rms_lbl.setText(f"{rms:.1f} Nm")
+
+        # Update recording sample-count label every spectrum frame (~30 Hz)
+        if self._recorder.recording:
+            n = self._recorder.sample_count
+            self._rec_lbl.setText(f"{n:,} samples  ({n/SAMPLE_RATE:.1f} s)")
 
         # DISABLED: overlay update (overlay_win disabled)
         # if self._overlay_win is not None and self._overlay_win.isVisible():
