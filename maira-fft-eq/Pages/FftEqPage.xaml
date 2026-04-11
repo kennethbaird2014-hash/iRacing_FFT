@@ -1,0 +1,126 @@
+<UserControl x:Class="MarvinsAIRARefactored.Pages.FftEqPage"
+             x:Name="Root"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:local="clr-namespace:MarvinsAIRARefactored.Pages"
+             xmlns:controls="clr-namespace:MarvinsAIRARefactored.Controls"
+             xmlns:datacontext="clr-namespace:MarvinsAIRARefactored.DataContext"
+             mc:Ignorable="d"
+             d:DesignWidth="900">
+
+    <UserControl.DataContext>
+        <Binding Source="{x:Static datacontext:DataContext.Instance}" />
+    </UserControl.DataContext>
+
+    <ScrollViewer VerticalScrollBarVisibility="Auto">
+
+        <StackPanel Margin="0,0,0,20">
+
+            <!-- Enable toggle + toolbar -->
+            <Grid Margin="0,0,0,12">
+
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="20" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="10" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+
+                <controls:MairaSwitch Grid.Column="0"
+                                      x:Name="EnableSwitch"
+                                      IsOn="{Binding Settings.FftEqEnabled, Mode=TwoWay}"
+                                      Label="Enable FFT EQ"
+                                      VerticalAlignment="Center" />
+
+                <Button Grid.Column="3"
+                        x:Name="AddBand_Button"
+                        Content="Add Band"
+                        Padding="12,6"
+                        Click="AddBand_Click"
+                        VerticalAlignment="Center" />
+
+                <Button Grid.Column="5"
+                        x:Name="ResetBands_Button"
+                        Content="Reset"
+                        Padding="12,6"
+                        Click="ResetBands_Click"
+                        VerticalAlignment="Center" />
+
+            </Grid>
+
+            <!-- Spectrum display -->
+            <Border BorderThickness="1"
+                    BorderBrush="#444"
+                    Background="#111"
+                    CornerRadius="4">
+
+                <Grid>
+
+                    <!-- dB axis labels (right side) -->
+                    <Canvas x:Name="SpectrumCanvas"
+                            Height="260"
+                            ClipToBounds="True">
+
+                        <!-- Grid and spectrum polylines are created in code-behind -->
+
+                    </Canvas>
+
+                    <!-- Frequency axis labels painted over the canvas -->
+                    <Canvas x:Name="FreqLabelCanvas"
+                            Height="260"
+                            IsHitTestVisible="False" />
+
+                </Grid>
+
+            </Border>
+
+            <!-- Legend -->
+            <StackPanel Orientation="Horizontal"
+                        Margin="0,6,0,12">
+
+                <Rectangle Width="20" Height="3" Fill="#44BB66" Margin="0,0,4,0" VerticalAlignment="Center" />
+                <TextBlock Text="Raw" Foreground="#888" FontSize="11" VerticalAlignment="Center" Margin="0,0,16,0" />
+
+                <Rectangle Width="20" Height="3" Fill="#00CCCC" Margin="0,0,4,0" VerticalAlignment="Center" />
+                <TextBlock Text="Post-EQ" Foreground="#888" FontSize="11" VerticalAlignment="Center" Margin="0,0,16,0" />
+
+                <Rectangle Width="20" Height="3" Fill="#FFFFFF" Margin="0,0,4,0" VerticalAlignment="Center" />
+                <TextBlock Text="EQ curve" Foreground="#888" FontSize="11" VerticalAlignment="Center" />
+
+            </StackPanel>
+
+            <!-- EQ band list header -->
+            <Grid Margin="0,0,0,4">
+
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="30"  /> <!-- enabled -->
+                    <ColumnDefinition Width="100" /> <!-- type -->
+                    <ColumnDefinition Width="10"  />
+                    <ColumnDefinition Width="*"   /> <!-- freq -->
+                    <ColumnDefinition Width="10"  />
+                    <ColumnDefinition Width="*"   /> <!-- gain -->
+                    <ColumnDefinition Width="10"  />
+                    <ColumnDefinition Width="*"   /> <!-- Q -->
+                    <ColumnDefinition Width="10"  />
+                    <ColumnDefinition Width="30"  /> <!-- remove -->
+                </Grid.ColumnDefinitions>
+
+                <TextBlock Grid.Column="1" Text="Type"      Foreground="#666" FontSize="11" />
+                <TextBlock Grid.Column="3" Text="Frequency" Foreground="#666" FontSize="11" />
+                <TextBlock Grid.Column="5" Text="Gain (dB)" Foreground="#666" FontSize="11" />
+                <TextBlock Grid.Column="7" Text="Q"         Foreground="#666" FontSize="11" />
+
+            </Grid>
+
+            <!-- EQ band rows (populated from code-behind) -->
+            <StackPanel x:Name="BandRows_StackPanel" />
+
+        </StackPanel>
+
+    </ScrollViewer>
+
+</UserControl>

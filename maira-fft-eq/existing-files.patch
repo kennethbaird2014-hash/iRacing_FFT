@@ -1,0 +1,169 @@
+diff --git a/App.xaml.cs b/App.xaml.cs
+index 0c7c355..24d7ef2 100644
+--- a/App.xaml.cs
++++ b/App.xaml.cs
+@@ -72,6 +72,7 @@ public partial class App : Application
+ 	public HidHotplugMonitor HidHotplugMonitor { get; private set; } = null!;
+ 	public TradingPaints TradingPaints { get; private set; } = null!;
+ 	public AppManager AppManager { get; private set; } = null!;
++	public FftEq FftEq { get; private set; } = null!;
+ 
+ 	public GripOMeterWindow? GripOMeterWindow { get; set; }
+ 	public GapMonitorWindow? GapMonitorWindow { get; set; }
+@@ -135,6 +136,7 @@ public partial class App : Application
+ 		HidHotplugMonitor = new();
+ 		TradingPaints = new();
+ 		AppManager = new();
++		FftEq = new();
+ 
+ 		_timer.Elapsed += OnTimer;
+ 	}
+@@ -270,6 +272,7 @@ public partial class App : Application
+ 				SeatBeltTensioner.Initialize();
+ 				HidHotplugMonitor.Initialize();
+ 				TradingPaints.Initialize();
++			FftEq.Initialize();
+ 
+ #endif
+ 
+diff --git a/Components/RacingWheel.cs b/Components/RacingWheel.cs
+index 46bcac7..431bbc5 100644
+--- a/Components/RacingWheel.cs
++++ b/Components/RacingWheel.cs
+@@ -1408,6 +1408,10 @@ public class RacingWheel
+ 
+ 			_outputTorque = outputTorque;
+ 
++			// apply FFT EQ (IIR parametric filter chain, may be a no-op when disabled)
++
++			outputTorque = app.FftEq.ProcessSample( outputTorque );
++
+ 			// update force feedback torque
+ 
+ 			app.DirectInput.UpdateForceFeedbackEffect( outputTorque );
+diff --git a/Controls/MairaAppMenuPopup.xaml.cs b/Controls/MairaAppMenuPopup.xaml.cs
+index 304a09a..4f9b38c 100644
+--- a/Controls/MairaAppMenuPopup.xaml.cs
++++ b/Controls/MairaAppMenuPopup.xaml.cs
+@@ -291,6 +291,12 @@ namespace MarvinsAIRARefactored.Controls
+ 				PageUserControl = _graphPage
+ 			} );
+ 
++			AppMenuItems.Add( new AppMenuItem
++			{
++				AppPage = AppPage.FftEq,
++				PageUserControl = _fftEqPage
++			} );
++
+ 			AppMenuItems.Add( new AppMenuItem
+ 			{
+ 				AppPage = AppPage.Simulator,
+@@ -353,6 +359,7 @@ namespace MarvinsAIRARefactored.Controls
+ 				AppPage.SpeechToText => _speechToTextPage,
+ 				AppPage.TradingPaints => _tradingPaintsPage,
+ 				AppPage.Graph => _graphPage,
++				AppPage.FftEq => _fftEqPage,
+ 				AppPage.Simulator => _simulatorPage,
+ 				AppPage.AppManager => _appManagerPage,
+ 				AppPage.AppSettings => _appSettingsPage,
+@@ -427,6 +434,10 @@ namespace MarvinsAIRARefactored.Controls
+ 						menuItem.DisplayName = localization[ "Graph" ];
+ 						break;
+ 
++					case AppPage.FftEq:
++						menuItem.DisplayName = "FFT EQ";
++						break;
++
+ 					case AppPage.Simulator:
+ 						menuItem.DisplayName = localization[ "Simulator" ];
+ 						break;
+@@ -509,6 +520,10 @@ namespace MarvinsAIRARefactored.Controls
+ 					SelectedAppPageText = localization[ "Graph_UC" ];
+ 					break;
+ 
++				case AppPage.FftEq:
++					SelectedAppPageText = "FFT EQ";
++					break;
++
+ 				case AppPage.Simulator:
+ 					SelectedAppPageText = localization[ "Simulator_UC" ];
+ 					break;
+diff --git a/DataContext/Settings.cs b/DataContext/Settings.cs
+index e476104..fcf22d2 100644
+--- a/DataContext/Settings.cs
++++ b/DataContext/Settings.cs
+@@ -10607,4 +10607,42 @@ public class Settings : INotifyPropertyChanged
+ 	}
+ 
+ 	#endregion
++
++	#region FFT EQ
++
++	private bool _fftEqEnabled = false;
++
++	public bool FftEqEnabled
++	{
++		get => _fftEqEnabled;
++
++		set
++		{
++			if ( value != _fftEqEnabled )
++			{
++				_fftEqEnabled = value;
++
++				OnPropertyChanged();
++			}
++		}
++	}
++
++	private string _fftEqBandsJson = "[]";
++
++	public string FftEqBandsJson
++	{
++		get => _fftEqBandsJson;
++
++		set
++		{
++			if ( value != _fftEqBandsJson )
++			{
++				_fftEqBandsJson = value;
++
++				OnPropertyChanged();
++			}
++		}
++	}
++
++	#endregion
+ }
+diff --git a/MarvinsAIRARefactored.csproj b/MarvinsAIRARefactored.csproj
+index ff0581a..4507b78 100644
+--- a/MarvinsAIRARefactored.csproj
++++ b/MarvinsAIRARefactored.csproj
+@@ -132,6 +132,7 @@
+ 
+   <ItemGroup>
+     <PackageReference Include="Accord" Version="3.8.0" />
++    <PackageReference Include="MathNet.Numerics" Version="5.0.0" />
+     <PackageReference Include="Accord.Neuro" Version="3.8.0" />
+     <PackageReference Include="Accord.Statistics" Version="3.8.0" />
+     <PackageReference Include="CsvHelper" Version="33.1.0" />
+diff --git a/Windows/MainWindow.xaml.cs b/Windows/MainWindow.xaml.cs
+index aa19588..6cbe61f 100644
+--- a/Windows/MainWindow.xaml.cs
++++ b/Windows/MainWindow.xaml.cs
+@@ -33,6 +33,7 @@ public partial class MainWindow : Window
+ 		SpeechToText,
+ 		TradingPaints,
+ 		Graph,
++		FftEq,
+ 		Simulator,
+ 		AppManager,
+ 		AppSettings,
+@@ -54,6 +55,7 @@ public partial class MainWindow : Window
+ 	public static readonly SpeechToTextPage _speechToTextPage = new();
+ 	public static readonly TradingPaintsPage _tradingPaintsPage = new();
+ 	public static readonly GraphPage _graphPage = new();
++	public static readonly FftEqPage _fftEqPage = new();
+ 	public static readonly SimulatorPage _simulatorPage = new();
+ 	public static readonly AdminBoxxPage _adminBoxxPage = new();
+ 	public static readonly AppManagerPage _appManagerPage = new();
