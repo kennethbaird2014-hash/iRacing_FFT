@@ -1,0 +1,69 @@
+{
+  "name": "aston2",
+  "created": "2026-04-03T17:14:07.963334",
+  "bands": [
+    {
+      "freq": 22.5,
+      "gain_db": -6.0,
+      "q": 8.000000000000007,
+      "filter_type": "peak",
+      "enabled": true
+    },
+    {
+      "freq": 90.1,
+      "gain_db": 10.0,
+      "q": 5.000000000000016,
+      "filter_type": "peak",
+      "enabled": true
+    },
+    {
+      "freq": 31.700000000000003,
+      "gain_db": 6.0,
+      "q": 8.100000000000007,
+      "filter_type": "peak",
+      "enabled": true
+    },
+    {
+      "freq": 93.4,
+      "gain_db": 0.0,
+      "q": 6.0000000000000115,
+      "filter_type": "peak",
+      "enabled": true
+    },
+    {
+      "freq": 45.0,
+      "gain_db": 10.0,
+      "q": 6.3000000000000105,
+      "filter_type": "peak",
+      "enabled": true
+    },
+    {
+      "freq": 3.4000000000000004,
+      "gain_db": -11.0,
+      "q": 1.4,
+      "filter_type": "lowshelf",
+      "enabled": true
+    },
+    {
+      "freq": 99.0,
+      "gain_db": -5.0,
+      "q": 1.0999999999999863,
+      "filter_type": "highshelf",
+      "enabled": true
+    },
+    {
+      "freq": 60.0,
+      "gain_db": -6.5,
+      "q": 6.200000000000008,
+      "filter_type": "peak",
+      "enabled": true
+    },
+    {
+      "freq": 11.5,
+      "gain_db": 3.0,
+      "q": 8.499999999999988,
+      "filter_type": "peak",
+      "enabled": true
+    }
+  ]
+}

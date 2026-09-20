@@ -1,0 +1,238 @@
+{
+  "name": "aston13",
+  "created": "2026-04-06T13:58:53.469842",
+  "bands": [
+    {
+      "freq": 10.0,
+      "gain_db": -24.0,
+      "q": 0.9999999999999999,
+      "filter_type": "lowshelf",
+      "enabled": true,
+      "group": 0
+    },
+    {
+      "freq": 7.5,
+      "gain_db": 3.5,
+      "q": 3.0,
+      "filter_type": "peak",
+      "enabled": false,
+      "group": 0
+    },
+    {
+      "freq": 11.2,
+      "gain_db": 0.19999999999999996,
+      "q": 5.399999999999998,
+      "filter_type": "peak",
+      "enabled": false,
+      "group": 0
+    },
+    {
+      "freq": 14.0,
+      "gain_db": -2.5,
+      "q": 5.099999999999999,
+      "filter_type": "peak",
+      "enabled": false,
+      "group": 0
+    },
+    {
+      "freq": 17.5,
+      "gain_db": -0.19999999999999996,
+      "q": 1.0,
+      "filter_type": "peak",
+      "enabled": false,
+      "group": 0
+    },
+    {
+      "freq": 25.0,
+      "gain_db": 3.0,
+      "q": 10.0,
+      "filter_type": "peak",
+      "enabled": false,
+      "group": 0
+    },
+    {
+      "freq": 30.0,
+      "gain_db": 4.0,
+      "q": 10.0,
+      "filter_type": "peak",
+      "enabled": false,
+      "group": 0
+    },
+    {
+      "freq": 35.7,
+      "gain_db": 3.0,
+      "q": 10.0,
+      "filter_type": "peak",
+      "enabled": false,
+      "group": 0
+    },
+    {
+      "freq": 58.0,
+      "gain_db": 3.0,
+      "q": 8.0,
+      "filter_type": "peak",
+      "enabled": true,
+      "group": 0
+    },
+    {
+      "freq": 58.1,
+      "gain_db": 3.5,
+      "q": 15.0,
+      "filter_type": "peak",
+      "enabled": true,
+      "group": 0
+    },
+    {
+      "freq": 60.0,
+      "gain_db": -8.0,
+      "q": 20.0,
+      "filter_type": "peak",
+      "enabled": true,
+      "group": 0
+    },
+    {
+      "freq": 62.0,
+      "gain_db": 3.5,
+      "q": 15.0,
+      "filter_type": "peak",
+      "enabled": true,
+      "group": 0
+    },
+    {
+      "freq": 62.0,
+      "gain_db": 3.0,
+      "q": 8.0,
+      "filter_type": "peak",
+      "enabled": true,
+      "group": 0
+    },
+    {
+      "freq": 77.5,
+      "gain_db": -1.5,
+      "q": 9.8,
+      "filter_type": "peak",
+      "enabled": true,
+      "group": 0
+    },
+    {
+      "freq": 85.1,
+      "gain_db": 6.5,
+      "q": 40.0,
+      "filter_type": "peak",
+      "enabled": true,
+      "group": 0
+    },
+    {
+      "freq": 90.0,
+      "gain_db": 6.5,
+      "q": 40.0,
+      "filter_type": "peak",
+      "enabled": false,
+      "group": 0
+    },
+    {
+      "freq": 94.9,
+      "gain_db": 6.5,
+      "q": 40.0,
+      "filter_type": "peak",
+      "enabled": true,
+      "group": 0
+    },
+    {
+      "freq": 102.0,
+      "gain_db": -3.0,
+      "q": 9.299999999999999,
+      "filter_type": "peak",
+      "enabled": true,
+      "group": 0
+    },
+    {
+      "freq": 117.5,
+      "gain_db": 3.5,
+      "q": 10.0,
+      "filter_type": "peak",
+      "enabled": true,
+      "group": 0
+    },
+    {
+      "freq": 117.5,
+      "gain_db": 4.5,
+      "q": 16.0,
+      "filter_type": "peak",
+      "enabled": true,
+      "group": 0
+    },
+    {
+      "freq": 120.0,
+      "gain_db": -8.5,
+      "q": 20.0,
+      "filter_type": "peak",
+      "enabled": true,
+      "group": 0
+    },
+    {
+      "freq": 122.0,
+      "gain_db": 5.0,
+      "q": 15.9,
+      "filter_type": "peak",
+      "enabled": true,
+      "group": 0
+    },
+    {
+      "freq": 122.0,
+      "gain_db": 4.0,
+      "q": 10.0,
+      "filter_type": "peak",
+      "enabled": true,
+      "group": 0
+    },
+    {
+      "freq": 134.5,
+      "gain_db": -2.0,
+      "q": 4.100000000000002,
+      "filter_type": "peak",
+      "enabled": true,
+      "group": 0
+    },
+    {
+      "freq": 145.0,
+      "gain_db": 7.0,
+      "q": 20.0,
+      "filter_type": "peak",
+      "enabled": true,
+      "group": 0
+    },
+    {
+      "freq": 155.0,
+      "gain_db": 7.0,
+      "q": 20.0,
+      "filter_type": "peak",
+      "enabled": true,
+      "group": 0
+    },
+    {
+      "freq": 169.0,
+      "gain_db": -3.3,
+      "q": 2.8999999999999986,
+      "filter_type": "peak",
+      "enabled": true,
+      "group": 0
+    },
+    {
+      "freq": 169.0,
+      "gain_db": 7.5,
+      "q": 4.9,
+      "filter_type": "peak",
+      "enabled": false,
+      "group": 0
+    },
+    {
+      "freq": 176.5,
+      "gain_db": 8.0,
+      "q": 1.2999999999999994,
+      "filter_type": "peak",
+      "enabled": true,
+      "group": 0
+    }
+  ]
+}

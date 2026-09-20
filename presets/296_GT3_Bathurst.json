@@ -1,0 +1,198 @@
+{
+  "name": "296_GT3_Bathurst",
+  "created": "2026-04-07T21:06:47.825038",
+  "bands": [
+    {
+      "freq": 1.2999999999999998,
+      "gain_db": -10.0,
+      "q": 1.5,
+      "filter_type": "lowshelf",
+      "enabled": true,
+      "group": 0
+    },
+    {
+      "freq": 11.0,
+      "gain_db": 1.5,
+      "q": 10.0,
+      "filter_type": "peak",
+      "enabled": true,
+      "group": 0
+    },
+    {
+      "freq": 16.5,
+      "gain_db": 1.5,
+      "q": 10.0,
+      "filter_type": "peak",
+      "enabled": true,
+      "group": 0
+    },
+    {
+      "freq": 26.0,
+      "gain_db": 0.0,
+      "q": 50.0,
+      "filter_type": "peak",
+      "enabled": true,
+      "group": 0
+    },
+    {
+      "freq": 27.5,
+      "gain_db": 3.0,
+      "q": 50.0,
+      "filter_type": "peak",
+      "enabled": true,
+      "group": 0
+    },
+    {
+      "freq": 32.3,
+      "gain_db": 3.0,
+      "q": 50.0,
+      "filter_type": "peak",
+      "enabled": true,
+      "group": 0
+    },
+    {
+      "freq": 44.0,
+      "gain_db": 1.5,
+      "q": 50.0,
+      "filter_type": "peak",
+      "enabled": true,
+      "group": 0
+    },
+    {
+      "freq": 49.5,
+      "gain_db": 1.5,
+      "q": 50.0,
+      "filter_type": "peak",
+      "enabled": true,
+      "group": 0
+    },
+    {
+      "freq": 56.9,
+      "gain_db": 3.0,
+      "q": 50.0,
+      "filter_type": "peak",
+      "enabled": true,
+      "group": 0
+    },
+    {
+      "freq": 60.1,
+      "gain_db": -3.0,
+      "q": 50.0,
+      "filter_type": "peak",
+      "enabled": false,
+      "group": 0
+    },
+    {
+      "freq": 63.0,
+      "gain_db": 3.0,
+      "q": 50.0,
+      "filter_type": "peak",
+      "enabled": true,
+      "group": 0
+    },
+    {
+      "freq": 70.5,
+      "gain_db": 3.0,
+      "q": 50.0,
+      "filter_type": "peak",
+      "enabled": true,
+      "group": 0
+    },
+    {
+      "freq": 76.0,
+      "gain_db": 2.5,
+      "q": 50.0,
+      "filter_type": "peak",
+      "enabled": true,
+      "group": 0
+    },
+    {
+      "freq": 88.1,
+      "gain_db": 3.0,
+      "q": 50.0,
+      "filter_type": "peak",
+      "enabled": true,
+      "group": 0
+    },
+    {
+      "freq": 91.9,
+      "gain_db": 3.0,
+      "q": 50.0,
+      "filter_type": "peak",
+      "enabled": true,
+      "group": 0
+    },
+    {
+      "freq": 103.5,
+      "gain_db": 1.5,
+      "q": 50.0,
+      "filter_type": "peak",
+      "enabled": true,
+      "group": 0
+    },
+    {
+      "freq": 116.0,
+      "gain_db": 2.5,
+      "q": 50.0,
+      "filter_type": "peak",
+      "enabled": true,
+      "group": 0
+    },
+    {
+      "freq": 124.0,
+      "gain_db": 2.5,
+      "q": 50.0,
+      "filter_type": "peak",
+      "enabled": true,
+      "group": 0
+    },
+    {
+      "freq": 136.0,
+      "gain_db": 2.5,
+      "q": 50.0,
+      "filter_type": "peak",
+      "enabled": true,
+      "group": 0
+    },
+    {
+      "freq": 148.0,
+      "gain_db": 2.5,
+      "q": 50.0,
+      "filter_type": "peak",
+      "enabled": true,
+      "group": 0
+    },
+    {
+      "freq": 152.0,
+      "gain_db": 2.5,
+      "q": 50.0,
+      "filter_type": "peak",
+      "enabled": true,
+      "group": 0
+    },
+    {
+      "freq": 175.0,
+      "gain_db": 2.5,
+      "q": 50.0,
+      "filter_type": "peak",
+      "enabled": true,
+      "group": 0
+    },
+    {
+      "freq": 130.5,
+      "gain_db": 2.5,
+      "q": 50.0,
+      "filter_type": "peak",
+      "enabled": true,
+      "group": 0
+    },
+    {
+      "freq": 163.5,
+      "gain_db": 2.0,
+      "q": 50.0,
+      "filter_type": "peak",
+      "enabled": true,
+      "group": 0
+    }
+  ]
+}

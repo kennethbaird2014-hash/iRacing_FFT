@@ -58,12 +58,45 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QObject, QRectF, QTimer
 from PyQt6.QtGui import QPainter, QLinearGradient, QPen, QColor, QFont, QPalette
 # DISABLED: from modal_panel import ModalAnalysisPanel
+from virtual_lab import VirtualLabTab
 
 try:
     import irsdk
     IRSDK_AVAILABLE = True
 except ImportError:
     IRSDK_AVAILABLE = False
+
+# ── Virtual MOZA Driver for Simulation ──────────────────────────────────────
+class VirtualMozaOutput(QObject):
+    """A mock MOZA driver that emits signals to the Virtual Lab instead of hardware."""
+    torque_emitted = pyqtSignal(float)
+    IS_NULL = True # Tells watchdog to treat as simulated
+
+    def __init__(self, max_torque_nm=12.0):
+        super().__init__()
+        self.max_torque_nm = max_torque_nm
+        self.output_scale = 1.0
+        self.active = False
+        self.call_rate_hz = 360.0
+        self.peak_nm = 0.0
+
+    def start(self, hwnd):
+        self.active = True
+        return True
+
+    def stop(self):
+        self.active = False
+
+    def set_torque_nm(self, nm):
+        if not self.active: return
+        self.peak_nm = max(self.peak_nm, abs(nm))
+        self.torque_emitted.emit(float(nm))
+
+    def sdk_init(self): return True
+    def get_equalizer(self): return [100]*6
+    def set_equalizer(self, bands): return True
+    @staticmethod
+    def eq_db_to_moza(db, idx): return int(10** (db/20.0) * 100)
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 SAMPLE_RATE      = 360      # Hz  (irsdkLog360Hz=1 in app.ini recommended)
@@ -199,7 +232,6 @@ class RealtimeDSP:
         self._prev_out   = 0.0
         self._smooth_out = 0.0
 
-
     def process(self, chunk, bands):
         if len(chunk) == 0:
             return chunk
@@ -275,6 +307,9 @@ class RealtimeDSP:
                 s = alpha * s + (1.0 - alpha) * out[i]
                 out[i] = s
             self._smooth_out = s
+
+        # ── Hard Limiter (Physical safety) ────────────────────────────────────
+        out = np.clip(out, -MAX_TORQUE_NM, MAX_TORQUE_NM)
 
         return out
 
@@ -528,8 +563,16 @@ class IRacingThread(QThread):
                         torque_st = None
 
                     if torque_st is not None:
-                        for v in torque_st:
+                        t_start = time.monotonic()
+                        n = len(torque_st)
+                        dt = (1.0 / 60.0) / n if n > 0 else 0
+                        for i, v in enumerate(torque_st):
                             self.sample_ready.emit(float(v))
+                            if i < n - 1:
+                                target = t_start + (i + 1) * dt
+                                while time.monotonic() < target:
+                                    if target - time.monotonic() > 0.002:
+                                        time.sleep(0.001)
                     else:
                         # Fallback to 60 Hz
                         torque = ir["SteeringWheelTorque"]
@@ -538,8 +581,15 @@ class IRacingThread(QThread):
                                 self.status_changed.emit("Connected   (Fallback 60 Hz mode)")
                                 self._st_warned = True
                             v = float(torque)
-                            for _ in range(6):
+                            t_start = time.monotonic()
+                            dt = (1.0 / 60.0) / 6.0
+                            for i in range(6):
                                 self.sample_ready.emit(v)
+                                if i < 5:
+                                    target = t_start + (i + 1) * dt
+                                    while time.monotonic() < target:
+                                        if target - time.monotonic() > 0.002:
+                                            time.sleep(0.001)
                 else:
                     # Stall detection: no new tick for >300 ms → pause fade
                     if not getattr(self, '_paused_emitted', False):
@@ -602,7 +652,11 @@ class ReplayThread(QThread):
         self._samples  = samples
         self._car_name = car_name
         self._running  = True
+        self._paused   = False
         self.speed_mph = 0.0
+
+    def set_paused(self, val: bool):
+        self._paused = val
 
     def run(self):
         total = len(self._samples)
@@ -616,6 +670,9 @@ class ReplayThread(QThread):
         tick = time.monotonic()
 
         for i, v in enumerate(self._samples):
+            while self._paused and self._running:
+                time.sleep(0.05)
+                tick = time.monotonic() # Reset tick to avoid massive catch-up
             if not self._running:
                 break
             self.sample_ready.emit(float(v))
@@ -675,6 +732,13 @@ class FFTProcessor(QObject):
         self._fade_hold    = 0    # samples remaining in hold phase
         self._fade_remain  = 0    # samples remaining in fade phase
         self._last_sample  = 0.0  # last real sample value (held during fade)
+        self._last_sample_ts = time.time()
+
+    def check_failsafe(self):
+        """Zero out hardware torque if data has stalled for >100ms."""
+        if time.time() - self._last_sample_ts > 0.100:
+            if self.moza_output and self.moza_output.active:
+                self.moza_output.set_torque_nm(0.0)
 
     def set_bands(self, bands):
         # Snapshot: shallow-copy each EQBand so UI mutations mid-chunk can't
@@ -694,6 +758,7 @@ class FFTProcessor(QObject):
         self._fade_remain = 0
 
     def add_sample(self, v: float):
+        self._last_sample_ts = time.time()
         # A real sample arriving cancels any active fade immediately
         if self._fade_active:
             self._cancel_fade()
@@ -723,7 +788,7 @@ class FFTProcessor(QObject):
                     raw_s = self._moza_raw_sm_st
                 else:
                     raw_s = v
-                moza.set_torque_nm(float(np.clip(fx - raw_s, -MAX_TORQUE_NM, 0.0)))
+                moza.set_torque_nm(float(np.clip(fx - raw_s, -MAX_TORQUE_NM, MAX_TORQUE_NM)))
 
         # ── display / FFT path — 30 Hz chunks ────────────────────────────────
         self._in_chunk.append(v)
@@ -1380,6 +1445,11 @@ class MainWindow(QMainWindow):
         self._wf_display = np.empty((n_bins, WATERFALL_ROWS), dtype=np.float32)
         self._wf_head    = 0
 
+        # Virtual Lab
+        self._virtual_lab = VirtualLabTab(str(Path(__file__).parent / "virtual_wheel.png"))
+        self._virtual_moza = VirtualMozaOutput()
+        self._virtual_moza.torque_emitted.connect(self._on_virtual_torque)
+
         pg.setConfigOptions(antialias=True, background="#0d0d0d")
         self._build_ui()
         self._load_settings()
@@ -1390,6 +1460,23 @@ class MainWindow(QMainWindow):
         root  = QWidget(); self.setCentralWidget(root)
         vmain = QVBoxLayout(root)
         vmain.setSpacing(4); vmain.setContentsMargins(8, 8, 8, 8)
+
+        # Main Tabs
+        self._tabs = QTabWidget()
+        vmain.addWidget(self._tabs)
+
+        # --- Tab 1: Analyzer ---
+        analyzer_tab = QWidget()
+        self._tabs.addTab(analyzer_tab, "Live Analyzer")
+        vmain = QVBoxLayout(analyzer_tab)
+        vmain.setSpacing(4); vmain.setContentsMargins(0, 0, 0, 0)
+
+        # --- Tab 2: Virtual Lab ---
+        self._tabs.addTab(self._virtual_lab, "MOZA Virtual Lab")
+
+        # --- Tab 3: Lap Log ---
+        self._lap_log = LapLogWidget()
+        self._tabs.addTab(self._lap_log, "Lap Log")
 
         # Header
         hdr = QHBoxLayout()
@@ -1410,6 +1497,12 @@ class MainWindow(QMainWindow):
             "Live peak torque: 'in' = raw iRacing, 'out' = after EQ/DSP.\n"
             "If 'in' stays at 0.00 with iRacing FFB disabled, raise iRacing FFB to ~5%.")
         hdr.addWidget(self._torque_lbl)
+
+        hdr.addSpacing(15)
+        self._sim_toggle = QCheckBox("Simulation Mode")
+        self._sim_toggle.setStyleSheet("color:#ffaa00; font-weight:bold;")
+        self._sim_toggle.toggled.connect(self._toggle_sim_mode)
+        hdr.addWidget(self._sim_toggle)
 
         # DISABLED: Overlay button
         # hdr.addSpacing(15)
@@ -1911,6 +2004,19 @@ class MainWindow(QMainWindow):
             "iRacing does not need to be running.")
         self._replay_btn.clicked.connect(self._load_replay)
         replay_row.addWidget(self._replay_btn)
+
+        self._replay_pause_btn = QPushButton("⏸")
+        self._replay_pause_btn.setFixedWidth(30)
+        self._replay_pause_btn.clicked.connect(self._toggle_replay_pause)
+        self._replay_pause_btn.setEnabled(False)
+        replay_row.addWidget(self._replay_pause_btn)
+
+        self._replay_stop_btn = QPushButton("⏹")
+        self._replay_stop_btn.setFixedWidth(30)
+        self._replay_stop_btn.clicked.connect(self._stop_replay)
+        self._replay_stop_btn.setEnabled(False)
+        replay_row.addWidget(self._replay_stop_btn)
+
         self._replay_lbl = QLabel("")
         self._replay_lbl.setStyleSheet("color:#888; font-size:9px; font-family:Consolas;")
         replay_row.addWidget(self._replay_lbl)
@@ -1996,6 +2102,7 @@ class MainWindow(QMainWindow):
         self._fade_timer = QTimer(self)
         self._fade_timer.setInterval(int(UPDATE_INTERVAL / SAMPLE_RATE * 1000) or 1)
         self._fade_timer.timeout.connect(self._proc.pump_fade)
+        self._fade_timer.timeout.connect(self._proc.check_failsafe)
         self._fade_timer.start()
 
         # Test-tone timer: fires every ~16 ms, injects 6 samples (≈360 Hz stream)
@@ -2108,10 +2215,40 @@ class MainWindow(QMainWindow):
         self._replay_thread.progress.connect(self._on_replay_progress)
         self._replay_thread.start()
         self._replay_lbl.setText(f"playing: {Path(path).name}")
+        self._replay_pause_btn.setEnabled(True)
+        self._replay_pause_btn.setText("⏸")
+        self._replay_stop_btn.setEnabled(True)
+
+    def _toggle_replay_pause(self):
+        if self._replay_thread is None: return
+        is_paused = not getattr(self._replay_thread, '_paused', False)
+        self._replay_thread.set_paused(is_paused)
+        self._replay_pause_btn.setText("▶" if is_paused else "⏸")
+        if is_paused:
+            self._on_status("Replay Paused")
+        else:
+            self._on_status("Replay Resumed")
+
+    def _stop_replay(self):
+        if self._replay_thread is not None:
+            self._replay_thread.stop()
+            self._replay_thread = None
+        self._replay_pause_btn.setEnabled(False)
+        self._replay_pause_btn.setText("⏸")
+        self._replay_stop_btn.setEnabled(False)
+        self._replay_lbl.setText("Replay stopped")
+        self._on_status("Replay stopped")
+        # Restart iRacing thread if it was running before
+        if hasattr(self, '_ir_thread'):
+            self._ir_thread.start()
 
     def _on_replay_progress(self, current: int, total: int):
         if total == 0:
             return
+        if current >= total - 1:
+            self._replay_pause_btn.setEnabled(False)
+            self._replay_stop_btn.setEnabled(False)
+            
         pct = current * 100 // total
         elapsed = current / SAMPLE_RATE
         total_s = total  / SAMPLE_RATE
@@ -2415,6 +2552,32 @@ class MainWindow(QMainWindow):
             self._moza_status.setStyleSheet(
                 "color:#888; font-size:9px; font-family:Consolas;")
 
+    def _toggle_sim_mode(self, checked: bool):
+        """Enable Virtual Lab routing."""
+        if checked:
+            self._sim_toggle.setStyleSheet("color:#00ff88; font-weight:bold;")
+            self._virtual_moza.start(0)
+            self._proc.moza_output = self._virtual_moza
+            self._tabs.setCurrentIndex(1) # Switch to Lab tab
+            self._status.setText("SIMULATION MODE ACTIVE")
+        else:
+            self._sim_toggle.setStyleSheet("color:#ffaa00; font-weight:bold;")
+            self._virtual_moza.stop()
+            if self._proc.moza_output == self._virtual_moza:
+                self._proc.moza_output = None
+            self._status.setText("Live mode active")
+
+    def _on_virtual_torque(self, nm):
+        # Update high-speed virtual wheel in the Lab tab
+        # Use steering angle from iRacing thread if active
+        angle = 0.0
+        if hasattr(self, '_ir_thread') and hasattr(self._ir_thread, 'steering_angle'):
+            angle = self._ir_thread.steering_angle
+        
+        self._virtual_lab.wheel.update_state(
+            nm, angle, self._virtual_lab.get_max_torque()
+        )
+
     def _toggle_test_tone(self, checked: bool):
         if checked:
             self._tone_phase = 0.0
@@ -2501,6 +2664,8 @@ class MainWindow(QMainWindow):
         if ok:
             self._ph_status.setText(f"Pushed  |  {label}")
             self._ph_status.setStyleSheet("color:#00ff88; font-size:9px; font-family:Consolas;")
+            # Sync to Virtual Lab mock
+            self._virtual_lab.sdk_sim.set_eq_values(bands)
         else:
             self._ph_status.setText(f"Push failed: {self._moza.last_error}")
             self._ph_status.setStyleSheet("color:#ff4444; font-size:9px; font-family:Consolas;")

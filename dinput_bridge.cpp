@@ -172,7 +172,7 @@ __declspec(dllexport) int __cdecl dinput_init(void* hwnd)
     // 3. Set exclusive+background cooperative level and acquire
     hr = g_pDevice->SetCooperativeLevel(
         (HWND)hwnd,
-        DISCL_NONEXCLUSIVE | DISCL_BACKGROUND);  // coexists with Pit House
+        DISCL_EXCLUSIVE | DISCL_BACKGROUND);  // coexists with Pit House
     if (FAILED(hr)) { _teardown_unlocked(); return -3; }
 
     hr = g_pDevice->Acquire();

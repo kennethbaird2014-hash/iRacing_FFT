@@ -1,0 +1,110 @@
+{
+  "name": "296_GT3",
+  "created": "2026-04-07T19:03:31.203236",
+  "bands": [
+    {
+      "freq": 1.2999999999999998,
+      "gain_db": -10.0,
+      "q": 1.5,
+      "filter_type": "lowshelf",
+      "enabled": true,
+      "group": 0
+    },
+    {
+      "freq": 25.0,
+      "gain_db": 3.0,
+      "q": 50.0,
+      "filter_type": "peak",
+      "enabled": true,
+      "group": 0
+    },
+    {
+      "freq": 34.8,
+      "gain_db": 3.0,
+      "q": 50.0,
+      "filter_type": "peak",
+      "enabled": true,
+      "group": 0
+    },
+    {
+      "freq": 56.9,
+      "gain_db": 3.0,
+      "q": 50.0,
+      "filter_type": "peak",
+      "enabled": true,
+      "group": 0
+    },
+    {
+      "freq": 60.1,
+      "gain_db": -3.0,
+      "q": 50.0,
+      "filter_type": "peak",
+      "enabled": true,
+      "group": 0
+    },
+    {
+      "freq": 63.0,
+      "gain_db": 3.0,
+      "q": 50.0,
+      "filter_type": "peak",
+      "enabled": true,
+      "group": 0
+    },
+    {
+      "freq": 85.1,
+      "gain_db": 3.0,
+      "q": 50.0,
+      "filter_type": "peak",
+      "enabled": true,
+      "group": 0
+    },
+    {
+      "freq": 94.9,
+      "gain_db": 3.0,
+      "q": 50.0,
+      "filter_type": "peak",
+      "enabled": true,
+      "group": 0
+    },
+    {
+      "freq": 116.5,
+      "gain_db": 2.5,
+      "q": 50.0,
+      "filter_type": "peak",
+      "enabled": true,
+      "group": 0
+    },
+    {
+      "freq": 123.5,
+      "gain_db": 2.5,
+      "q": 50.0,
+      "filter_type": "peak",
+      "enabled": true,
+      "group": 0
+    },
+    {
+      "freq": 145.0,
+      "gain_db": 3.0,
+      "q": 50.0,
+      "filter_type": "peak",
+      "enabled": true,
+      "group": 0
+    },
+    {
+      "freq": 155.0,
+      "gain_db": 2.5,
+      "q": 50.0,
+      "filter_type": "peak",
+      "enabled": true,
+      "group": 0
+    },
+    {
+      "freq": 176.5,
+      "gain_db": 2.5,
+      "q": 50.0,
+      "filter_type": "peak",
+      "enabled": true,
+      "group": 0
+    }
+  ]
+}

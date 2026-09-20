@@ -1,0 +1,62 @@
+{
+  "name": "aston",
+  "created": "2026-04-03T14:18:08.424160",
+  "bands": [
+    {
+      "freq": 24.5,
+      "gain_db": 3.0,
+      "q": 10.0,
+      "filter_type": "peak",
+      "enabled": true
+    },
+    {
+      "freq": 84.1,
+      "gain_db": 6.0,
+      "q": 10.0,
+      "filter_type": "peak",
+      "enabled": true
+    },
+    {
+      "freq": 8.700000000000003,
+      "gain_db": -3.0,
+      "q": 3.0000000000000187,
+      "filter_type": "peak",
+      "enabled": true
+    },
+    {
+      "freq": 95.9,
+      "gain_db": 6.0,
+      "q": 10.0,
+      "filter_type": "peak",
+      "enabled": true
+    },
+    {
+      "freq": 41.0,
+      "gain_db": 3.0,
+      "q": 10.0,
+      "filter_type": "peak",
+      "enabled": true
+    },
+    {
+      "freq": 3.9000000000000004,
+      "gain_db": -10.0,
+      "q": 1.4,
+      "filter_type": "lowshelf",
+      "enabled": true
+    },
+    {
+      "freq": 99.0,
+      "gain_db": -5.0,
+      "q": 1.0999999999999863,
+      "filter_type": "highshelf",
+      "enabled": true
+    },
+    {
+      "freq": 59.0,
+      "gain_db": 5.0,
+      "q": 10.0,
+      "filter_type": "peak",
+      "enabled": true
+    }
+  ]
+}
