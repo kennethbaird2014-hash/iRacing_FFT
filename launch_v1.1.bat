@@ -1,4 +1,5 @@
 @echo off
 :: FFB Frequency Analyzer v1.1 – fallback launcher (no MOZA, no wheel button)
+:: Runs the archived v1.1 snapshot, not the current version.
 cd /d "%~dp0"
-start "" /B C:\Python314\pythonw.exe ffb_analyzer_v1.1.py
+start "" /B C:\Python314\pythonw.exe versions\ffb_analyzer_v1.1.py

@@ -1,5 +1,5 @@
 @echo off
-:: FFB Frequency Analyzer v1.3 – one-click launcher
+:: FFB Frequency Analyzer v2.0 – one-click launcher
 :: iRacing does NOT need to be running first.
 :: The app waits and auto-connects when you enter a session.
 cd /d "%~dp0"
